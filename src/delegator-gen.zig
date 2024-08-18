@@ -50,7 +50,7 @@ pub fn code_gen(
                     \\const msg = {s}{{
                     \\.{s} = .{{{s}}} 
                     \\}};
-                    \\self.channel.send(msg);
+                    \\try self.channel.send(msg);
                 ;
                 const msg_args = comptime join(", ", args_id);
                 const body = comptime std.fmt.comptimePrint(bodyfmt, .{ TNameParamUnion, decl, msg_args });
@@ -58,7 +58,7 @@ pub fn code_gen(
                 if (comptime args_id.len == 0) {
                     args = "self: *@This()";
                 }
-                si.* = comptime zfmt.fFn(decl, args, "void", body);
+                si.* = comptime zfmt.fFn(decl, args, "!void", body);
             }
             return comptime join("\n", &slc);
         }
