@@ -1,5 +1,5 @@
 const std = @import("std");
-pub const delegator_gen = @import("src/delegator_gen.zig");
+pub const delegator_gen = @import("src/delegator-gen.zig");
 const MyStruct = @import("src/example.zig").MyStruct;
 
 pub fn build(b: *std.Build) !void {
@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) !void {
     run_step.dependOn(&run_cmd.step);
 
     const msgbird_test = b.addTest(.{
-        .root_source_file = b.path("src/delegator_gen.zig"),
+        .root_source_file = b.path("src/delegator-gen.zig"),
         .target = target,
         .optimize = optimize,
     });

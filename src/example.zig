@@ -4,7 +4,7 @@ const mem = std.mem;
 const heap = std.heap;
 const Ast = std.zig.Ast;
 
-const delegator = @import("delegator_gen.zig");
+const delegator = @import("delegator-gen.zig");
 const ziggen = delegator.ziggen;
 
 pub const MyStruct = struct {
