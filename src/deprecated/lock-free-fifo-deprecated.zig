@@ -20,16 +20,21 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+// updated to zig version 0.13
+
+const Atomic = std.atomic.Value;
+const Ordering = std.builtin.AtomicOrder;
+
 const std = @import("std");
 
 const PaddedConsumer = struct {
-    head: std.atomic.Atomic(usize),
-    padding: [std.atomic.cache_line - @sizeOf(std.atomic.Atomic(usize))]u8 = undefined,
+    head: Atomic(usize),
+    padding: [std.atomic.cache_line - @sizeOf(Atomic(usize))]u8 = undefined,
 };
 
 const PaddedProducer = struct {
-    tail: std.atomic.Atomic(usize),
-    padding: [std.atomic.cache_line - @sizeOf(std.atomic.Atomic(usize))]u8 = undefined,
+    tail: Atomic(usize),
+    padding: [std.atomic.cache_line - @sizeOf(Atomic(usize))]u8 = undefined,
 };
 
 pub fn Ring(comptime T: type) type {
@@ -45,16 +50,16 @@ pub fn Ring(comptime T: type) type {
             std.debug.assert(std.math.isPowerOfTwo(items.len));
 
             return Self{
-                .consumer = PaddedConsumer{ .head = std.atomic.Atomic(usize).init(0) },
-                .producer = PaddedProducer{ .tail = std.atomic.Atomic(usize).init(0) },
+                .consumer = PaddedConsumer{ .head = Atomic(usize).init(0) },
+                .producer = PaddedProducer{ .tail = Atomic(usize).init(0) },
                 .items = items,
                 .mask = items.len - 1,
             };
         }
 
         pub inline fn enqueue(self: *Self, value: T) bool {
-            const consumer = self.consumer.head.load(std.atomic.Ordering.Acquire);
-            const producer = self.producer.tail.load(std.atomic.Ordering.Acquire);
+            const consumer = self.consumer.head.load(Ordering.acquire);
+            const producer = self.producer.tail.load(Ordering.acquire);
             const delta = producer + 1;
 
             if (delta & self.mask == consumer & self.mask)
@@ -62,32 +67,32 @@ pub fn Ring(comptime T: type) type {
 
             self.items[producer & self.mask] = value;
 
-            std.atomic.fence(std.atomic.Ordering.Release);
-            self.producer.tail.store(delta, std.atomic.Ordering.Release);
+            std.atomic.fence(Ordering.release);
+            self.producer.tail.store(delta, Ordering.release);
 
             return true;
         }
 
         pub inline fn dequeue(self: *Self) ?T {
-            const consumer = self.consumer.head.load(std.atomic.Ordering.Acquire);
-            const producer = self.producer.tail.load(std.atomic.Ordering.Acquire);
+            const consumer = self.consumer.head.load(Ordering.acquire);
+            const producer = self.producer.tail.load(Ordering.acquire);
 
             if (consumer == producer)
                 return null;
 
-            std.atomic.fence(std.atomic.Ordering.Acquire);
+            std.atomic.fence(Ordering.acquire);
 
             const value = self.items[consumer & self.mask];
 
-            std.atomic.fence(std.atomic.Ordering.Release);
-            self.consumer.head.store(consumer + 1, std.atomic.Ordering.Release);
+            std.atomic.fence(Ordering.Release);
+            self.consumer.head.store(consumer + 1, Ordering.release);
 
             return value;
         }
 
         pub inline fn length(self: *Self) usize {
-            const consumer = self.consumer.head.load(std.atomic.Ordering.Acquire);
-            const producer = self.producer.tail.load(std.atomic.Ordering.Acquire);
+            const consumer = self.consumer.head.load(Ordering.acquire);
+            const producer = self.producer.tail.load(Ordering.acquire);
             return (producer - consumer) & self.mask;
         }
     };

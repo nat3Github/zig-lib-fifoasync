@@ -1,2 +1,2 @@
 const std = @import("std");
-const delegator_gen = @import("delegator_gen.zig");
+pub const server = @import("server.zig");
