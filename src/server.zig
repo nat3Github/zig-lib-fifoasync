@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 const Atomic = std.atomic.Value;
-pub const generate_delegator = @import("delegator-gen.zig").code_gen;
 const spsc = @import("weakrb-spsc.zig");
 pub const LinkedChannel = spsc.LinkedChannelWeakRB;
 pub const get_bidirectional_channels = spsc.get_bidirectional_linked_channels_rb;
@@ -13,7 +12,7 @@ const AtomicBool = Atomic(bool);
 var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
 const test_gpa = heapalloc.allocator();
 
-const ThreadAction = enum {
+pub const ThreadAction = enum {
     SleepNow,
     WaitForWakeUpOrTimeOut,
 };
@@ -113,8 +112,9 @@ const ChannelWrapper = struct {
     };
 };
 
-/// A Blocking thread for auto generated Delegators
-const DelegatorChannel = LinkedChannel;
+/// the Channel used by Delegator Thread, its also compatible with auto generated Delegators.
+pub const DelegatorChannel = LinkedChannel;
+/// A Blocking thread for auto generated Delegators.
 pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type, comptime capacity: comptime_int) type {
     return struct {
         const Self = @This();
@@ -155,6 +155,10 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
         /// (use WakeUpThread for that)
         pub fn get_wake_handle(self: *Self) *std.Thread.ResetEvent {
             return &self.thread.reset;
+        }
+        pub fn deinit(self: *Self) void {
+            self.fifo.deinit();
+            self.thread.deinit();
         }
     };
 }
