@@ -1,10 +1,11 @@
 const std = @import("std");
 const AtomicV = std.atomic.Value;
-const O = std.builtin.AtomicOrder;
+const AtomicOrder = std.builtin.AtomicOrder;
 const AtomicUsize = AtomicV(usize);
 const Allocator = std.mem.Allocator;
-const testing = std.testing;
 
+var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
+const test_gpa = heapalloc.allocator();
 /// Single Producer Single Consumer Lockfree Queue Algorithm according to:
 /// https://www.irif.fr/~guatto/papers/sbac13.pdf WeakRB Algorithm
 pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
@@ -37,9 +38,9 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
         }
         pub fn push_slice(self: *Self, items: []const T) !void {
             const n = items.len;
-            const b = self.back.load(O.unordered);
+            const b = self.back.load(AtomicOrder.unordered);
             if ((self.pfront + capacity - b) < n) {
-                self.pfront = self.front.load(O.acquire);
+                self.pfront = self.front.load(AtomicOrder.acquire);
                 if ((self.pfront + capacity - b) < n) {
                     return error.NotEnoughSpace;
                 }
@@ -47,13 +48,13 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
             for (0..n) |i| {
                 self.data[(b + i) % capacity] = items[i];
             }
-            self.back.store(b + n, O.release);
+            self.back.store(b + n, AtomicOrder.release);
         }
         pub fn pop_slice(self: *Self, items: []T) !void {
             const n = items.len;
-            const f = self.front.load(O.unordered);
+            const f = self.front.load(AtomicOrder.unordered);
             if ((self.cback - f) < n) {
-                self.cback = self.back.load(O.acquire);
+                self.cback = self.back.load(AtomicOrder.acquire);
                 if ((self.cback - f) < n) {
                     return error.NotEnoughItems;
                 }
@@ -61,7 +62,7 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
             for (items, 0..) |*e, i| {
                 e.* = self.data[(f + i) % capacity];
             }
-            self.front.store(f + n, O.release);
+            self.front.store(f + n, AtomicOrder.release);
         }
         pub fn push(self: *Self, item: T) !void {
             const xitem: [1]T = .{item};
@@ -77,7 +78,7 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
     };
 }
 test "spsc basic test" {
-    var fifo = try FifoWeakRB(u32, 4).init(testing.allocator_instance);
+    var fifo = try FifoWeakRB(u32, 4).init(test_gpa);
     for (0..10) |i| {
         const casted: u32 = @intCast(i);
         fifo.push(casted) catch unreachable;
@@ -95,19 +96,19 @@ pub fn LinkedChannelWeakRB(
         const Self = @This();
         sender: *FifoWeakRB(SendT, capacity),
         receiver: *FifoWeakRB(ReturnT, capacity),
-        fn send(self: *Self, msg: SendT) !void {
+        pub fn send(self: *Self, msg: SendT) !void {
             try self.sender.push(msg);
         }
-        fn receive(self: *Self) ?ReturnT {
+        pub fn receive(self: *Self) ?ReturnT {
             return self.receiver.pop();
         }
-        fn init(sender: *FifoWeakRB(SendT, capacity), receiver: *FifoWeakRB(ReturnT, capacity)) Self {
+        pub fn init(sender: *FifoWeakRB(SendT, capacity), receiver: *FifoWeakRB(ReturnT, capacity)) Self {
             return Self{
                 .sender = sender,
                 .receiver = receiver,
             };
         }
-        fn deinit(self: *Self) void {
+        pub fn deinit(self: *Self) void {
             self.alloc.free(self.sender.deinit());
         }
     };
@@ -121,7 +122,7 @@ pub fn get_bidirectional_linked_channels_rb(gpa: std.mem.Allocator, comptime A: 
 }
 
 test "2way channel basic test" {
-    const channels = try get_bidirectional_linked_channels_rb(testing.allocator_instance(), u32, i32, 4);
+    const channels = try get_bidirectional_linked_channels_rb(test_gpa, u32, i32, 4);
     var base = channels[0];
     var server = channels[1];
     for (0..10) |i| {
