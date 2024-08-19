@@ -103,13 +103,22 @@ test "simple call loop" {
 // spin n times:
 // if event handle event return result through channel
 
-/// A Background server for auto generated Delegators
-/// to make one pass the generated Param and Return Unions
-pub fn DelegatorThread(comptime T: type, comptime D: type, comptime capacity: comptime_int) type {
+const ChannelWrapper = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+    pub const VTable = struct {
+        alloc: *const fn (
+            self: *anyopaque,
+        ) ?[*]u8,
+    };
+};
+
+/// A Blocking thread for auto generated Delegators
+const DelegatorChannel = LinkedChannel;
+pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type, comptime capacity: comptime_int) type {
     return struct {
         const Self = @This();
-        const Args = D.Args;
-        const Ret = D.Ret;
+        const T = D.Type;
         const Channel = LinkedChannel(Args, Ret, capacity);
         pub const ServerChannel = LinkedChannel(Ret, Args, capacity);
         thread: CallLoop(S),
@@ -118,8 +127,9 @@ pub fn DelegatorThread(comptime T: type, comptime D: type, comptime capacity: co
             inst: T,
             channel: ServerChannel,
         };
-        pub fn init(alloc: Allocator, instance: T, delegator: D) !Self {
-            const instance_msg_handler: fn (*T, Args) Ret = delegator.message_handler;
+        /// launches a background thread with the instances T
+        /// the instance then can be called through an Delegator instance
+        pub fn init(alloc: Allocator, instance: T) !Self {
             const wrapper = S{
                 .inst = instance,
             };
@@ -128,13 +138,23 @@ pub fn DelegatorThread(comptime T: type, comptime D: type, comptime capacity: co
                     self: *S,
                 ) !ThreadTimeOutNanoSecs {
                     while (self.channel.receive()) |msg| {
-                        const ret = instance_msg_handler(&self.inst, msg);
+                        const ret = D.message_handler(&self.inst, msg);
                         self.channel.send(ret);
                     }
                     return ThreadTimeOutNanoSecs.wait_for_wakeup_or_timeout_ns(3000 * 1_000_000);
                 }
             };
             return Self{ .thread = try CallLoop.init(alloc, wrapper, xf.f) };
+        }
+        /// get a channel to instantiate a Delegator Instance
+        pub fn get_channel(self: *Self) *DelegatorChannel(Args, Ret, capacity) {
+            return &self.fifo;
+        }
+        /// returns a ResetEvent which wakes up the Delegator Thread when its sleeping
+        /// waking is not considered realtime safe
+        /// (use WakeUpThread for that)
+        pub fn get_wake_handle(self: *Self) *std.Thread.ResetEvent {
+            return &self.thread.reset;
         }
     };
 }
