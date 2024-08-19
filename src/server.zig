@@ -1,4 +1,5 @@
 const std = @import("std");
+const testing = std.testing;
 const Atomic = std.atomic.Value;
 pub const generate_delegator = @import("delegator-gen.zig").code_gen;
 const spsc = @import("weakrb-spsc.zig");
@@ -6,13 +7,13 @@ pub const LinkedChannel = spsc.LinkedChannelWeakRB;
 pub const get_bidirectional_channels = spsc.get_bidirectional_linked_channels_rb;
 pub const Fifo = spsc.FifoWeakRB;
 
-const Action = enum {
-    sleep_for_interval_ns,
-    wait_for_wakeup_or_timeout_ns,
+const NanoSeconds = enum {
+    SleepNow,
+    WaitForWakeUpOrTimeOut,
 };
-pub const ThreadAction = union(Action) {
-    sleep_for_interval_ns: u64,
-    wait_for_wakeup_or_timeout_ns: u64,
+pub const ThreadAction = union(NanoSeconds) {
+    SleepNow: u64,
+    WaitForWakeUpOrTimeOut: u64,
 };
 
 const CallLoop =
@@ -30,10 +31,10 @@ const CallLoop =
                 var action = ThreadAction.SleepNanoSeconds(1000);
                 while (running) {
                     switch (action) {
-                        .SleepNanoSeconds => |sleep_ns| {
+                        .SleepNow => |sleep_ns| {
                             std.time.sleep(sleep_ns);
                         },
-                        .WaitForWakeup => |timeout_ns| {
+                        .WaitForWakeUpOrTimeOut => |timeout_ns| {
                             reset.reset();
                             reset.timedWait(timeout_ns) catch {};
                         },
@@ -60,6 +61,8 @@ const CallLoop =
     }
 };
 
+test "simple call loop" {}
+
 // server implementation using fifo's and condition variables + mmutexes: for non blocking realtimesafe work with blocking background threads
 
 // server 1 (actual server)
@@ -70,18 +73,19 @@ const CallLoop =
 // spin n times:
 // if event handle event return result through channel
 
-/// A Background server for auto generated
-pub fn make_server_for_delegator(comptime ArgsUnion: type, comptime RetUnion: type) type {
-    const Self = @This()(ArgsUnion, RetUnion);
+/// A Background server for auto generated Delegators
+/// to make one pass the generated Param and Return Unions
+pub fn DelegatorServer(comptime ParamUnion: type, comptime RetUnion: type) type {
+    const Self = @This()(ParamUnion, RetUnion);
     return struct {
         thread: CallLoop,
-        register_fifo: LinkedChannel(ArgsUnion, RetUnion),
+        register_fifo: LinkedChannel(ParamUnion, RetUnion),
         pub fn init(alloc: std.mem.Allocator, worker: anytype, delegator: anytype) Self {
-            const wf: fn (*@TypeOf(worker), ArgsUnion) RetUnion = delegator.message_handler;
+            const wf: fn (*@TypeOf(worker), ParamUnion) RetUnion = delegator.message_handler;
             const W = struct {
                 const WSelf = @This();
                 worker: @TypeOf(worker),
-                channel: LinkedChannel(RetUnion, ArgsUnion),
+                channel: LinkedChannel(RetUnion, ParamUnion),
                 fn f(self: *WSelf) !ThreadAction {
                     while (self.channel.receive()) |msg| {
                         wf(&self.worker, msg);

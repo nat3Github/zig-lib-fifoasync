@@ -3,6 +3,7 @@ const AtomicV = std.atomic.Value;
 const O = std.builtin.AtomicOrder;
 const AtomicUsize = AtomicV(usize);
 const Allocator = std.mem.Allocator;
+const testing = std.testing;
 
 /// Single Producer Single Consumer Lockfree Queue Algorithm according to:
 /// https://www.irif.fr/~guatto/papers/sbac13.pdf WeakRB Algorithm
@@ -13,7 +14,6 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
         cback: usize = 0,
         front: AtomicUsize = AtomicUsize.init(0),
         pfront: usize = 0,
-
         data: []T,
         gpa: Allocator,
         pub fn init(alloc: Allocator) !Self {
@@ -22,6 +22,15 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
                 .gpa = alloc,
                 .data = data,
             };
+        }
+        pub fn init_on_heap(alloc: Allocator) !*Self {
+            const data = try alloc.alloc(T, capacity);
+            const this = try alloc.create(Self);
+            this.* = .{
+                .gpa = alloc,
+                .data = data,
+            };
+            return this;
         }
         pub fn deinit(self: *Self) void {
             self.gpa.free(self.data);
@@ -39,7 +48,6 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
                 self.data[(b + i) % capacity] = items[i];
             }
             self.back.store(b + n, O.release);
-            return true;
         }
         pub fn pop_slice(self: *Self, items: []T) !void {
             const n = items.len;
@@ -50,11 +58,10 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
                     return error.NotEnoughItems;
                 }
             }
-            for (&items, 0..) |*e, i| {
+            for (items, 0..) |*e, i| {
                 e.* = self.data[(f + i) % capacity];
             }
             self.front.store(f + n, O.release);
-            return true;
         }
         pub fn push(self: *Self, item: T) !void {
             const xitem: [1]T = .{item};
@@ -69,6 +76,15 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
         }
     };
 }
+test "spsc basic test" {
+    var fifo = try FifoWeakRB(u32, 4).init(testing.allocator_instance);
+    for (0..10) |i| {
+        const casted: u32 = @intCast(i);
+        fifo.push(casted) catch unreachable;
+        const ret = fifo.pop().?;
+        try std.testing.expect((ret == casted));
+    }
+}
 
 pub fn LinkedChannelWeakRB(
     comptime SendT: type,
@@ -77,45 +93,41 @@ pub fn LinkedChannelWeakRB(
 ) type {
     return struct {
         const Self = @This();
-        sender: FifoWeakRB(SendT),
-        receiver: *FifoWeakRB(ReturnT),
+        sender: *FifoWeakRB(SendT, capacity),
+        receiver: *FifoWeakRB(ReturnT, capacity),
         fn send(self: *Self, msg: SendT) !void {
-            if (!self.sender.enqueue(msg)) {
-                return error.SendFifoFull;
-            }
+            try self.sender.push(msg);
         }
         fn receive(self: *Self) ?ReturnT {
-            return self.receiver.dequeue();
+            return self.receiver.pop();
         }
-        fn init(sender: FifoWeakRB(SendT, capacity), receiver: *FifoWeakRB(ReturnT, capacity)) Self {
+        fn init(sender: *FifoWeakRB(SendT, capacity), receiver: *FifoWeakRB(ReturnT, capacity)) Self {
             return Self{
                 .sender = sender,
                 .receiver = receiver,
             };
         }
         fn deinit(self: *Self) void {
-            self.alloc.free(self.sender_underlying_data);
+            self.alloc.free(self.sender.deinit());
         }
     };
 }
 pub fn get_bidirectional_linked_channels_rb(gpa: std.mem.Allocator, comptime A: type, comptime B: type, capacity: comptime_int) !std.meta.Tuple(&.{ LinkedChannelWeakRB(A, B, capacity), LinkedChannelWeakRB(B, A, capacity) }) {
-    var fifoA = try FifoWeakRB(A, capacity).init(gpa);
-    var fifoB = try FifoWeakRB(B, capacity).init(gpa);
-    const c1 = LinkedChannelWeakRB(A, B, capacity).init(fifoA, &fifoB);
-    const c2 = LinkedChannelWeakRB(B, A).init(fifoB, &fifoA);
+    const fifoA = try FifoWeakRB(A, capacity).init_on_heap(gpa);
+    const fifoB = try FifoWeakRB(B, capacity).init_on_heap(gpa);
+    const c1 = LinkedChannelWeakRB(A, B, capacity).init(fifoA, fifoB);
+    const c2 = LinkedChannelWeakRB(B, A, capacity).init(fifoB, fifoA);
     return .{ c1, c2 };
 }
 
-test "2way channel test" {
-    var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
-    const gpa = heapalloc.allocator();
-    const channels = try get_bidirectional_linked_channels_rb(gpa, u32, i32, 4);
+test "2way channel basic test" {
+    const channels = try get_bidirectional_linked_channels_rb(testing.allocator_instance(), u32, i32, 4);
     var base = channels[0];
     var server = channels[1];
-    try base.send(2);
-    try base.send(2);
-    try base.send(2);
-    server.receive();
-    try base.send(2);
-    try base.send(2);
+    for (0..10) |i| {
+        const casted: u32 = @intCast(i);
+        try base.send(casted);
+        const ret: u32 = server.receive().?;
+        try std.testing.expect((ret == casted));
+    }
 }
