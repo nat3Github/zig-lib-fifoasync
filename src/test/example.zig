@@ -19,11 +19,30 @@ pub fn main() !void {
     const channel = server_as.get_channel();
 
     var my_struct_as = MyStructAS{ .channel = channel };
-    const handle = server_as.get_wake_handle();
+    // const handle = server_as.get_wake_handle();
+    // handle.set();
 
-    try my_struct_as.selfFunction2(23.0);
-    handle.set();
-    std.time.sleep(100 * 1_000_000);
+    std.time.sleep(1000 * 1_000_000);
+    // after that the server goes to sleep
+    try my_struct_as.void_fn(0, 0.0);
+    try my_struct_as.self_u32_fn();
+    server_as.thread.reset.set();
+    std.debug.print("now wait 3 seconds for timeout", .{});
+    std.time.sleep(3000 * 1_000_000);
+
+    // handle return
+    while (my_struct_as.channel.receive()) |ret| {
+        switch (ret) {
+            .void_fn => |r| {
+                std.debug.print("{any} was returned\n", .{r});
+            },
+            .self_u32_fn => |r| {
+                std.debug.print("{any} was returned\n", .{r});
+            },
+            else => unreachable,
+        }
+    }
+
     // try my_struct_as.something(&MyStruct{});
     // handle.set();
     // std.time.sleep(100 * 1_000_000);

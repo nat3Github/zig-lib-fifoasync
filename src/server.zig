@@ -15,19 +15,19 @@ var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
 const test_gpa = heapalloc.allocator();
 
 pub const ThreadAction = enum {
-    SleepNow,
-    WaitForWakeUpOrTimeOut,
+    SleepInterval,
+    WaitOrTimeOut,
 };
 pub const ThreadTimeOutNanoSecs = union(ThreadAction) {
-    SleepNow: u64,
-    WaitForWakeUpOrTimeOut: u64,
+    SleepInterval: u64,
+    WaitOrTimeOut: u64,
 };
 
 pub fn CallLoop(comptime T: type) type {
     return struct {
         const Self = @This();
         running: Atomic(bool),
-        reset: std.Thread.ResetEvent,
+        reset: *std.Thread.ResetEvent,
         /// return of f determines if thread will sleep for the returned interval before the next call to f
         /// or sleep till it's woken up through the condvar
         /// if error is returned from f the thread terminates
@@ -36,15 +36,20 @@ pub fn CallLoop(comptime T: type) type {
                 fn exe(instancex: T, fx: fn (*T) anyerror!ThreadTimeOutNanoSecs, running: *Atomic(bool), reset: *std.Thread.ResetEvent) void {
                     running.store(true, AtomicOrder.seq_cst);
                     var t: T = instancex;
-                    var action = ThreadTimeOutNanoSecs{ .SleepNow = 0 * 1_000_000 };
+                    var action = ThreadTimeOutNanoSecs{ .SleepInterval = 0 * 1_000_000 };
+                    std.log.debug("call loop started", .{});
                     while (running.load(AtomicOrder.unordered)) {
                         switch (action) {
-                            .SleepNow => |sleep_ns| {
+                            .SleepInterval => |sleep_ns| {
                                 std.time.sleep(sleep_ns);
                             },
-                            .WaitForWakeUpOrTimeOut => |timeout_ns| {
+                            .WaitOrTimeOut => |timeout_ns| {
                                 reset.reset();
-                                reset.timedWait(timeout_ns) catch {};
+                                std.log.debug("call loop will go to sleep", .{});
+                                reset.timedWait(timeout_ns) catch |e| {
+                                    std.log.debug("wait timed out {any}", .{e});
+                                };
+                                std.log.debug("call loop woke up", .{});
                             },
                         }
                         action = fx(&t) catch |e| {
@@ -55,10 +60,10 @@ pub fn CallLoop(comptime T: type) type {
                     std.log.warn("call loop has exited\n", .{});
                 }
             };
-            var reset = std.Thread.ResetEvent{};
+            const reset = try alloc.create(std.Thread.ResetEvent);
+            reset.* = std.Thread.ResetEvent{};
             var running: AtomicBool = AtomicBool.init(false);
-            // std.debug.print("running var is: {any}\n", .{running.load(AtomicOrder.seq_cst)});
-            const thread = try std.Thread.spawn(.{ .allocator = alloc }, thr.exe, .{ instance, f, &running, &reset });
+            const thread = try std.Thread.spawn(.{ .allocator = alloc }, thr.exe, .{ instance, f, &running, reset });
             thread.detach();
             return Self{
                 .running = running,
@@ -82,7 +87,7 @@ test "simple call loop" {
             }
             std.debug.print("call loop: {}\n", .{self.counter});
             self.counter += 1;
-            return ThreadTimeOutNanoSecs{ .SleepNow = 1 * 1_000_000 };
+            return ThreadTimeOutNanoSecs{ .SleepInterval = 1 * 1_000_000 };
         }
     };
     const x = TestingFn{};
@@ -137,7 +142,7 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
             const basefifo = bichannel[0];
             const serverfifo = bichannel[1];
             const wrapper = S{ .inst = instance, .channel = serverfifo };
-            const xf = struct {
+            const ff = struct {
                 fn f(
                     self: *S,
                 ) !ThreadTimeOutNanoSecs {
@@ -145,10 +150,10 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
                         const ret = D.__message_handler(&self.inst, msg);
                         try self.channel.send(ret);
                     }
-                    return ThreadTimeOutNanoSecs{ .WaitForWakeUpOrTimeOut = 3000 * 1_000_000 };
+                    return ThreadTimeOutNanoSecs{ .WaitOrTimeOut = 3000 * 1_000_000 };
                 }
             };
-            return Self{ .thread = try ThreadT.init(alloc, wrapper, xf.f), .fifo = basefifo };
+            return Self{ .thread = try ThreadT.init(alloc, wrapper, ff.f), .fifo = basefifo };
         }
         /// get a channel to instantiate a Delegator Instance
         pub fn get_channel(self: *Self) *DelegatorChannel(Args, Ret, capacity) {
@@ -158,7 +163,11 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
         /// waking is not considered realtime safe
         /// (use WakeUpThread for that)
         pub fn get_wake_handle(self: *Self) *std.Thread.ResetEvent {
-            return &self.thread.reset;
+            return self.thread.reset;
+        }
+        /// this wakes up the background thread: this is a blocking operation
+        pub fn wake_up(self: *Self) void {
+            self.get_wake_handle().set();
         }
         pub fn deinit(self: *Self) void {
             self.fifo.deinit();
@@ -202,7 +211,7 @@ pub fn WakeUpThread(comptime capacity: usize) type {
                         x.wake_up.set();
                     }
                 }
-                return ThreadTimeOutNanoSecs{ .SleepNow = self.timer_ns };
+                return ThreadTimeOutNanoSecs{ .SleepInterval = self.timer_ns };
             }
         };
 
