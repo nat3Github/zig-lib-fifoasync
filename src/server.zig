@@ -23,11 +23,13 @@ pub const ThreadTimeOutNanoSecs = union(ThreadAction) {
     WaitOrTimeOut: u64,
 };
 
+/// note will leak an AtomicBool if deinitialized.
 pub fn CallLoop(comptime T: type) type {
     return struct {
         const Self = @This();
-        running: Atomic(bool),
+        running: *AtomicBool,
         reset: *std.Thread.ResetEvent,
+        alloc: Allocator,
         /// return of f determines if thread will sleep for the returned interval before the next call to f
         /// or sleep till it's woken up through the condvar
         /// if error is returned from f the thread terminates
@@ -62,17 +64,21 @@ pub fn CallLoop(comptime T: type) type {
             };
             const reset = try alloc.create(std.Thread.ResetEvent);
             reset.* = std.Thread.ResetEvent{};
-            var running: AtomicBool = AtomicBool.init(false);
-            const thread = try std.Thread.spawn(.{ .allocator = alloc }, thr.exe, .{ instance, f, &running, reset });
+            const running: *AtomicBool = try alloc.create(AtomicBool);
+            running.* = AtomicBool.init(false);
+            const thread = try std.Thread.spawn(.{ .allocator = alloc }, thr.exe, .{ instance, f, running, reset });
             thread.detach();
             return Self{
                 .running = running,
                 .reset = reset,
+                .alloc = alloc,
             };
         }
         pub fn deinit(
             self: *Self,
         ) void {
+            self.alloc.destroy(self.running);
+            // we leak the running Atomic Bool because if we free it maybe the other thread hasnt read it and terminated...
             self.running.store(false, std.builtin.AtomicOrder.unordered);
         }
     };
@@ -185,11 +191,11 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
 pub fn WakeUpThread(comptime capacity: usize) type {
     return struct {
         const Self = @This();
-        const ABoolResetEvent = struct { if_wakeup: AtomicBool = false, wake_up: *std.Thread.ResetEvent };
+        const ABoolResetEvent = struct { if_wakeup: *AtomicBool, wake_up: *std.Thread.ResetEvent };
 
         counter: usize = 0,
         thread: CallLoop(WakeStruct),
-        fifo: Fifo(ABoolResetEvent, capacity),
+        fifo: *Fifo(ABoolResetEvent, capacity),
         cleanup_server_slots: []ABoolResetEvent,
         alloc: Allocator,
 
@@ -217,9 +223,9 @@ pub fn WakeUpThread(comptime capacity: usize) type {
         pub fn init(alloc: Allocator, poll_interval_ns: u64) !Self {
             const server_slots = try alloc.alloc(Self.ABoolResetEvent, capacity);
             errdefer alloc.free(server_slots);
-            var fifo = try Fifo(ABoolResetEvent, capacity).init(alloc);
+            var fifo = try Fifo(ABoolResetEvent, capacity).init_on_heap(alloc);
             errdefer fifo.deinit();
-            const wakestruct = WakeStruct{ .fifo_ptr = &fifo, .slots = server_slots, .timer_ns = poll_interval_ns };
+            const wakestruct = WakeStruct{ .fifo_ptr = fifo, .slots = server_slots, .timer_ns = poll_interval_ns };
             const thread = try CallLoop(WakeStruct).init(alloc, wakestruct, WakeStruct.f);
             errdefer thread.deinit();
             return Self{
@@ -231,17 +237,22 @@ pub fn WakeUpThread(comptime capacity: usize) type {
         }
         pub fn deinit(self: *Self) void {
             self.thread.deinit();
+            self.fifo.deinit();
+            const fifo_ptr: *Fifo(ABoolResetEvent, capacity) = self.fifo;
+            self.alloc.destroy(fifo_ptr);
             self.alloc.free(self.cleanup_server_slots);
         }
-        pub fn add(self: *Self, wakeup_handle: *std.Thread.ResetEvent) !*AtomicBool {
-            if (self.counter + 1 == capacity) {
+        /// returns AtomicBool pointer. you are responsible to destroy it
+        pub fn add(self: *Self, gpa: Allocator, wakeup_handle: *std.Thread.ResetEvent) !*AtomicBool {
+            if (self.counter == capacity) {
                 return error.AllWakeUpSlotsAreOccupied;
             }
-            var wake_up_atb: AtomicBool = AtomicBool(false);
-            const rsevent = ABoolResetEvent{ .if_wakeup = wake_up_atb, .wake_up = wakeup_handle };
-            self.fifo.enqueue(rsevent);
+            const atb_ptr = try gpa.create(AtomicBool);
+            atb_ptr.* = AtomicBool.init(false);
+            const rsevent = ABoolResetEvent{ .if_wakeup = atb_ptr, .wake_up = wakeup_handle };
+            try self.fifo.push(rsevent);
             self.counter += 1;
-            return &wake_up_atb;
+            return atb_ptr;
         }
         pub fn get_delegator_thread(gpa: Allocator, comptime ParamUnion: type, comptime RetUnion: type) !DelegatorThread(ParamUnion, RetUnion) {
             _ = gpa;

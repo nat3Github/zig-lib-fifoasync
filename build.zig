@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) !void {
 
     // add test
     const codegen_test = b.addTest(.{
-        .root_source_file = b.path("src/delegator-gen.zig"),
+        .root_source_file = b.path("src/delegator.zig"),
         .target = target,
         .optimize = optimize,
     });

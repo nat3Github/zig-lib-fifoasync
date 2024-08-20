@@ -17,7 +17,8 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
         pfront: usize = 0,
         data: []T,
         gpa: Allocator,
-        pub fn init(alloc: Allocator) !Self {
+        // this somehow doesnt work in threaded context so its privat for now
+        fn init(alloc: Allocator) !Self {
             const data = try alloc.alloc(T, capacity);
             return .{
                 .gpa = alloc,
