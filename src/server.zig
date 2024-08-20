@@ -131,6 +131,7 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
         const ThreadT = CallLoop(S);
         thread: ThreadT,
         fifo: Channel,
+        atomic_b_wake_up: ?*AtomicBool = null,
         const S = struct {
             inst: T,
             channel: ServerChannel,
@@ -165,9 +166,16 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
         pub fn get_wake_handle(self: *Self) *std.Thread.ResetEvent {
             return self.thread.reset;
         }
-        /// this wakes up the background thread: this is a blocking operation
-        pub fn wake_up(self: *Self) void {
+        pub fn wake_up_blocking(self: *Self) void {
             self.get_wake_handle().set();
+        }
+        /// this only works if set up with set_atomic_wake
+        pub fn wake_up_wait_free(self: *Self) void {
+            self.atomic_b_wake_up.?.store(true, AtomicOrder.unordered);
+        }
+        /// pass an atomic bool pointer from an WakeUpThread or similar to enable waitfree wakeups
+        pub fn set_atomic_wake(self: *Self, b: *AtomicBool) void {
+            self.atomic_b_wake_up = b;
         }
         pub fn deinit(self: *Self) void {
             self.fifo.deinit();

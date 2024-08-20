@@ -38,7 +38,6 @@ pub fn build(b: *std.Build) !void {
 
     const xx_module = b.addModule("xx", .{ .root_source_file = generated_zig });
     xx_module.addImport("examplestruct", struct_module);
-    // xx_module.addImport("std", std_module);
 
     const example_exe = b.addExecutable(.{
         .name = "meta example",

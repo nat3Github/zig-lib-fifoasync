@@ -9,7 +9,7 @@ pub fn main() !void {
     // this generates an delegator with struct MyStruct from example.zig and writes it to src/generated.zig:
     const MyStruct = example.MyStruct;
     // const fs = std.fs;
-    const src = codegen(MyStruct, "MyStruct", "NewStruct", ziggen.fmt(true).fImport("ziggen", "ziggen") ++ "\n" ++ ziggen.fmt(true).fImport("example_struct", "examplestruct"));
+    const src = codegen(MyStruct, "MyStruct", "NewStruct", ziggen.fmt(true).fImport("example_struct", "examplestruct"));
 
     try std.io.getStdOut().writeAll(src);
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);

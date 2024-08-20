@@ -11,7 +11,7 @@ pub const MyStruct = struct {
         std.debug.print("takes two i32 returns sum \n", .{});
         return x + y;
     }
-    pub fn self_u32_fn(self: *Self) u32 {
+    pub fn self_u32_fn(self: *Self) !u32 {
         std.debug.print("takes self returns 41_u32\n", .{});
         _ = self;
         return 41;

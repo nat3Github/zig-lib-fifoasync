@@ -26,8 +26,8 @@ pub fn main() !void {
     // after that the server goes to sleep
     try my_struct_as.void_fn(0, 0.0);
     try my_struct_as.self_u32_fn();
-    server_as.thread.reset.set();
-    std.debug.print("now wait 3 seconds for timeout", .{});
+    server_as.wake_up_blocking();
+    std.debug.print("now wait 3 seconds for timeout\n", .{});
     std.time.sleep(3000 * 1_000_000);
 
     // handle return
