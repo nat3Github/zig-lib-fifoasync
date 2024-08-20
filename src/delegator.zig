@@ -108,9 +108,19 @@ pub fn delegator_code(
                 \\{s}
                 \\return struct {{
                 \\    channel: {s},
+                \\    wake_up_atomic: ?*std.atomic.Value(bool) = null,
+                \\    wake_up_event: ?*std.Thread.ResetEvent = null,
                 \\    pub const Type = {s};
                 \\    const Self = @This();
                 \\{s}
+                \\    /// wake backround thread through a reset_event (must be initialized)
+                \\    pub fn wake_up_blocking(self: *Self) void {{
+                \\      self.wake_up_event.?.set();
+                \\    }}
+                \\    /// wake backround thread through a atomic bool pointer (must be initialized)
+                \\    pub fn wake_up_waitfree(self: *Self) void {{
+                \\      self.wake_up_atomic.?.store(true, std.builtin.AtomicOrder.unordered);
+                \\    }}
                 \\// delegated functions:
                 \\{s}
                 \\}};
