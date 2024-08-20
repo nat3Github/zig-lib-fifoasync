@@ -1,18 +1,16 @@
 // in here we are goin to generate the delegator structs
 const std = @import("std");
-const gen = @import("delegator-gen.zig");
-const example = @import("example");
+const fifoasync = @import("fifoasync");
+const codegen = fifoasync.codegen.delegator_code;
+const ziggen = fifoasync.ziggen;
+const example = @import("examplestruct");
 
 pub fn main() !void {
-
     // this generates an delegator with struct MyStruct from example.zig and writes it to src/generated.zig:
     const MyStruct = example.MyStruct;
     // const fs = std.fs;
-    const src = gen.code_gen(MyStruct, "MyStruct", "NewStruct", gen.ziggen.fmt(true).fImport("ziggen", "ziggen") ++ "\n" ++ gen.ziggen.fmt(true).fImport("example", "example"));
-    // const dir = try fs.cwd().openDir("src", .{});
-    // const file = try dir.createFile("generated.zig", .{});
-    // const file = try fs.kj(b.path("src/generated.zig").getPath(b), .{});
-    // try file.writeAll(src);
+    const src = codegen(MyStruct, "MyStruct", "NewStruct", ziggen.fmt(true).fImport("ziggen", "ziggen") ++ "\n" ++ ziggen.fmt(true).fImport("example_struct", "examplestruct"));
+
     try std.io.getStdOut().writeAll(src);
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();

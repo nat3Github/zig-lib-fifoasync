@@ -1,26 +1,17 @@
 const std = @import("std");
-pub const ziggen = @import("ziggen");
-// pub const check_ast_write_src_code = @import("ziggen.zig").check_ast_write_src_code;
+const ziggen = @import("ziggen");
 const zmeta = ziggen.meta;
 const zfmt = ziggen.fmt(true);
 const Type = std.builtin.Type;
 const join = zfmt.join;
 const comptimePrint = std.fmt.comptimePrint;
-pub fn code_gen2() []const u8 {
-    return comptime ziggen.fmt(true).fStruct("mystruct", "const x = hello world;\n_ = x;");
-}
-pub fn code_gen3() []const u8 {
-    return "hello world";
-}
-pub fn write_src_file(b: *std.Build, path: std.Build.LazyPath) !void {
-    try ziggen.write_src_code(b, path, code_gen2());
-}
+
 /// generates boilerplate source code for turning a struct into a Delegator which forwards the struct fn calls as Union Enum Messages
 /// will only generate functions which are pub
 /// to work properly you must import the file that defines T
 /// and other files which types are used in the methods of T
 /// std is already imported
-pub fn code_gen(
+pub fn delegator_code(
     comptime T: type,
     comptime nameof_T: []const u8,
     comptime name: []const u8,
@@ -55,9 +46,9 @@ pub fn code_gen(
                 ;
                 const msg_args = comptime join(", ", args_id);
                 const body = comptime std.fmt.comptimePrint(bodyfmt, .{ TNameParamUnion, decl, msg_args });
-                comptime var args: []const u8 = std.fmt.comptimePrint("self: *@This(), {s}", .{zfmt.combine_arg_lists_comma_seperated(args_id, args_type)});
+                comptime var args: []const u8 = std.fmt.comptimePrint("self: *Self, {s}", .{zfmt.combine_arg_lists_comma_seperated(args_id, args_type)});
                 if (comptime args_id.len == 0) {
-                    args = "self: *@This()";
+                    args = "self: *Self";
                 }
                 si.* = comptime zfmt.fFn(decl, args, "!void", body);
             }
@@ -65,21 +56,17 @@ pub fn code_gen(
         }
         //todo: calling convention for selfref vs not selfref
         fn message_handler() []const u8 {
+            const Nremote = "remote";
             comptime var slc: [decls.len][]const u8 = undefined;
             inline for (decls, &slc) |decl, *scli_i| {
-                const args = comptime zmeta.field(T, decl).Fn.params;
-                comptime var vargs: [args.len][]const u8 = undefined;
+                const args_type = comptime zmeta.decl_arglist_without_selfpointer(T, decl);
+                comptime var vargs: [args_type.len][]const u8 = undefined;
                 inline for (&vargs, 0..) |*v, a| {
                     v.* = comptime comptimePrint("v[{d}]", .{a});
                 }
                 comptime var xvargs: []const u8 = join(", ", &vargs);
                 if (comptime zmeta.decl_args_has_selfpointer(T, decl)) {
-                    const xremote = "remote";
-                    if (comptime args.len == 1) {
-                        xvargs = xremote;
-                    } else {
-                        xvargs = xremote ++ ", " ++ xvargs;
-                    }
+                    xvargs = Nremote ++ ", " ++ xvargs;
                 }
                 const xfmt =
                     \\{1s}.{0s} => {3s} {{
@@ -87,21 +74,21 @@ pub fn code_gen(
                     \\}}
                 ;
                 comptime var var_v: []const u8 = "";
-                if (comptime args.len > 0) {
+                if (comptime args_type.len > 0) {
                     var_v = comptimePrint("|v|", .{});
                 }
                 scli_i.* = comptime comptimePrint(xfmt, .{ decl, TNameTag, TNameReturnUnion, var_v, xvargs, Ttypename });
             }
             const msg_handler_body = comptime zfmt.fSwitch("msg", &slc);
 
-            return comptime zfmt.fFn("message_handler", "remote: *" ++ Ttypename ++ ", msg: " ++ TNameParamUnion, TNameReturnUnion, msg_handler_body);
+            return "/// calls the remote type with the right functions and arguments from the ArgUnions and returns a ReturnUnion.\n/// DelegatorServer uses this.\n" ++ comptime zfmt.fFn("__message_handler", Nremote ++ ": *" ++ Ttypename ++ ", msg: " ++ TNameParamUnion, TNameReturnUnion, msg_handler_body);
         }
         const msg_tag_enum = zfmt.fEnum(TNameTag, &decls);
         fn msg_union_fnargs() []const u8 {
             comptime var args_str: [decls.len][]const u8 = undefined;
             inline for (&args_str, decls) |*s, n| {
                 const args = comptime zmeta.decl_arglist_without_selfpointer(T, n);
-                const fmt = comptime comptimePrint("std.meta.tuple(&.{{{s}}})", .{join(", ", args)});
+                const fmt = comptime comptimePrint("std.meta.Tuple(&.{{{s}}})", .{join(", ", args)});
                 s.* = fmt;
             }
             return comptime zfmt.fTaggedUnion(TNameParamUnion, TNameTag, &decls, &args_str);
@@ -122,6 +109,7 @@ pub fn code_gen(
                 \\return struct {{
                 \\    channel: {s},
                 \\    pub const Type = {s};
+                \\    const Self = @This();
                 \\{s}
                 \\// delegated functions:
                 \\{s}

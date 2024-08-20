@@ -109,11 +109,11 @@ pub fn LinkedChannelWeakRB(
             };
         }
         pub fn deinit(self: *Self) void {
-            self.alloc.free(self.sender.deinit());
+            self.sender.deinit();
         }
     };
 }
-pub fn get_bidirectional_linked_channels_rb(gpa: std.mem.Allocator, comptime A: type, comptime B: type, capacity: comptime_int) !std.meta.Tuple(&.{ LinkedChannelWeakRB(A, B, capacity), LinkedChannelWeakRB(B, A, capacity) }) {
+pub fn get_bidirectional_linked_channels_rb(gpa: Allocator, comptime A: type, comptime B: type, capacity: comptime_int) !std.meta.Tuple(&.{ LinkedChannelWeakRB(A, B, capacity), LinkedChannelWeakRB(B, A, capacity) }) {
     const fifoA = try FifoWeakRB(A, capacity).init_on_heap(gpa);
     const fifoB = try FifoWeakRB(B, capacity).init_on_heap(gpa);
     const c1 = LinkedChannelWeakRB(A, B, capacity).init(fifoA, fifoB);

@@ -2,6 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const Atomic = std.atomic.Value;
 const spsc = @import("weakrb-spsc.zig");
+pub const codegen = @import("delegator.zig");
+pub const ziggen = @import("ziggen");
 pub const LinkedChannel = spsc.LinkedChannelWeakRB;
 pub const get_bidirectional_channels = spsc.get_bidirectional_linked_channels_rb;
 pub const Fifo = spsc.FifoWeakRB;
@@ -121,7 +123,8 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
         const T = D.Type;
         const Channel = LinkedChannel(Args, Ret, capacity);
         pub const ServerChannel = LinkedChannel(Ret, Args, capacity);
-        thread: CallLoop(S),
+        const ThreadT = CallLoop(S);
+        thread: ThreadT,
         fifo: Channel,
         const S = struct {
             inst: T,
@@ -130,21 +133,22 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
         /// launches a background thread with the instances T
         /// the instance then can be called through an Delegator instance
         pub fn init(alloc: Allocator, instance: T) !Self {
-            const wrapper = S{
-                .inst = instance,
-            };
+            const bichannel = try get_bidirectional_channels(alloc, Args, Ret, capacity);
+            const basefifo = bichannel[0];
+            const serverfifo = bichannel[1];
+            const wrapper = S{ .inst = instance, .channel = serverfifo };
             const xf = struct {
                 fn f(
                     self: *S,
                 ) !ThreadTimeOutNanoSecs {
                     while (self.channel.receive()) |msg| {
-                        const ret = D.message_handler(&self.inst, msg);
-                        self.channel.send(ret);
+                        const ret = D.__message_handler(&self.inst, msg);
+                        try self.channel.send(ret);
                     }
-                    return ThreadTimeOutNanoSecs.wait_for_wakeup_or_timeout_ns(3000 * 1_000_000);
+                    return ThreadTimeOutNanoSecs{ .WaitForWakeUpOrTimeOut = 3000 * 1_000_000 };
                 }
             };
-            return Self{ .thread = try CallLoop.init(alloc, wrapper, xf.f) };
+            return Self{ .thread = try ThreadT.init(alloc, wrapper, xf.f), .fifo = basefifo };
         }
         /// get a channel to instantiate a Delegator Instance
         pub fn get_channel(self: *Self) *DelegatorChannel(Args, Ret, capacity) {
