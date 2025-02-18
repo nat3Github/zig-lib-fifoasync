@@ -1,6 +1,5 @@
 const std = @import("std");
 // pub const delegator_gen = @import("src/delegator.zig");
-
 // notes: when using a dependency in a generated file
 // - generate the file
 // lets say the generated file imports("xyz");

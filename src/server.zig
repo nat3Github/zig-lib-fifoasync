@@ -14,51 +14,37 @@ const AtomicBool = Atomic(bool);
 var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
 const test_gpa = heapalloc.allocator();
 
-pub const ThreadAction = enum {
-    SleepInterval,
-    WaitOrTimeOut,
-};
-pub const ThreadTimeOutNanoSecs = union(ThreadAction) {
-    SleepInterval: u64,
-    WaitOrTimeOut: u64,
-};
-
-/// note will leak an AtomicBool if deinitialized.
-pub fn CallLoop(comptime T: type) type {
+const SleepNanoSeconds = u64;
+/// wraps a thread that owns an instance of T and calls T repeatedly with f
+/// if f returns an error this thread will stop!
+/// the thread will sleep for the returned nanoseconds value
+/// it can be woken up by using the reset_event field of this struct (using reset_event.set())
+pub fn LThreadHandle(comptime T: type) type {
     return struct {
         const Self = @This();
         running: *AtomicBool,
-        reset: *std.Thread.ResetEvent,
+        reset_event: *std.Thread.ResetEvent,
         alloc: Allocator,
-        /// return of f determines if thread will sleep for the returned interval before the next call to f
-        /// or sleep till it's woken up through the condvar
-        /// if error is returned from f the thread terminates
-        pub fn init(alloc: Allocator, instance: T, f: fn (*T) anyerror!ThreadTimeOutNanoSecs) !Self {
+        pub fn get_reset_event(self: *const Self) *std.Thread.ResetEvent {
+            return self.reset_event;
+        }
+        pub fn init(alloc: Allocator, instance: T, f: fn (*T) anyerror!SleepNanoSeconds) !Self {
             const thr = struct {
-                fn exe(instancex: T, fx: fn (*T) anyerror!ThreadTimeOutNanoSecs, running: *Atomic(bool), reset: *std.Thread.ResetEvent) void {
+                fn exe(instancex: T, fx: fn (*T) anyerror!SleepNanoSeconds, running: *Atomic(bool), reset: *std.Thread.ResetEvent) void {
                     running.store(true, AtomicOrder.seq_cst);
                     var t: T = instancex;
-                    var action = ThreadTimeOutNanoSecs{ .SleepInterval = 0 * 1_000_000 };
+                    var action: SleepNanoSeconds = 0;
                     std.log.debug("call loop started", .{});
                     while (running.load(AtomicOrder.unordered)) {
-                        switch (action) {
-                            .SleepInterval => |sleep_ns| {
-                                std.time.sleep(sleep_ns);
-                            },
-                            .WaitOrTimeOut => |timeout_ns| {
-                                reset.reset();
-                                std.log.debug("call loop will go to sleep", .{});
-                                reset.timedWait(timeout_ns) catch |e| {
-                                    std.log.debug("wait timed out {any}", .{e});
-                                };
-                                std.log.debug("call loop woke up", .{});
-                            },
-                        }
-                        action = fx(&t) catch |e| {
-                            std.log.err("thread will exit with error: {any}", .{e});
-                            return;
-                        };
+                        reset.reset();
+                        std.log.debug("call loop will go to sleep", .{});
+                        reset.timedWait(action) catch {};
+                        std.log.debug("call loop woke up", .{});
                     }
+                    action = fx(&t) catch |e| {
+                        std.log.err("thread will exit with error: {any}", .{e});
+                        return;
+                    };
                     std.log.warn("call loop has exited\n", .{});
                 }
             };
@@ -70,16 +56,9 @@ pub fn CallLoop(comptime T: type) type {
             thread.detach();
             return Self{
                 .running = running,
-                .reset = reset,
+                .reset_event = reset,
                 .alloc = alloc,
             };
-        }
-        pub fn deinit(
-            self: *Self,
-        ) void {
-            self.alloc.destroy(self.running);
-            // we leak the running Atomic Bool because if we free it maybe the other thread hasnt read it and terminated...
-            self.running.store(false, std.builtin.AtomicOrder.unordered);
         }
     };
 }
@@ -87,22 +66,22 @@ test "simple call loop" {
     const TestingFn = struct {
         const Self = @This();
         counter: u32 = 0,
-        fn f(self: *Self) anyerror!ThreadTimeOutNanoSecs {
+        fn f(self: *Self) anyerror!SleepNanoSeconds {
             if (self.counter == 10) {
                 return error.FinishedTest;
             }
             std.debug.print("call loop: {}\n", .{self.counter});
             self.counter += 1;
-            return ThreadTimeOutNanoSecs{ .SleepInterval = 1 * 1_000_000 };
+            return 1 * 1_000_000;
         }
     };
     const x = TestingFn{};
-    var calloop = try CallLoop(TestingFn).init(test_gpa, x, TestingFn.f);
+    const calloop = try LThreadHandle(TestingFn).init(test_gpa, x, TestingFn.f);
     for (0..6) |i| {
         std.time.sleep(1 * 1_000_000);
         std.debug.print("base thread: {}\n", .{i});
     }
-    calloop.deinit();
+    _ = calloop;
 }
 
 // server implementation using fifo's and condition variables + mmutexes: for non blocking realtimesafe work with blocking background threads
@@ -115,26 +94,24 @@ test "simple call loop" {
 // spin n times:
 // if event handle event return result through channel
 
-const ChannelWrapper = struct {
-    ptr: *anyopaque,
-    vtable: *const VTable,
-    pub const VTable = struct {
-        alloc: *const fn (
-            self: *anyopaque,
-        ) ?[*]u8,
-    };
-};
-
 /// the Channel used by Delegator Thread, its also compatible with auto generated Delegators.
 pub const DelegatorChannel = LinkedChannel;
 /// A Blocking thread for auto generated Delegators.
+///
+/// D: delegator type
+/// internal channel:
+/// uses Messages for communication:
+/// Args: the Send Type
+/// Ret: the Return Type
+/// capacity the internal capacity of the channel (how many functions do you call at once on a delegator? set this number accordingly)
+///
 pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type, comptime capacity: comptime_int) type {
     return struct {
         const Self = @This();
         const T = D.Type;
         const Channel = LinkedChannel(Args, Ret, capacity);
         pub const ServerChannel = LinkedChannel(Ret, Args, capacity);
-        const ThreadT = CallLoop(S);
+        const ThreadT = LThreadHandle(S);
         thread: ThreadT,
         fifo: Channel,
         const S = struct {
@@ -151,12 +128,13 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
             const ff = struct {
                 fn f(
                     self: *S,
-                ) !ThreadTimeOutNanoSecs {
+                ) !SleepNanoSeconds {
                     while (self.channel.receive()) |msg| {
                         const ret = D.__message_handler(&self.inst, msg);
                         try self.channel.send(ret);
                     }
-                    return ThreadTimeOutNanoSecs{ .WaitOrTimeOut = 3000 * 1_000_000 };
+                    // sleep maximum amount
+                    return std.math.maxInt(u64);
                 }
             };
             return Self{ .thread = try ThreadT.init(alloc, wrapper, ff.f), .fifo = basefifo };
@@ -169,7 +147,7 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
         /// waking is not considered realtime safe
         /// (use WakeUpThread for that)
         pub fn get_wake_handle(self: *Self) *std.Thread.ResetEvent {
-            return self.thread.reset;
+            return self.thread.reset_event;
         }
         pub fn wake_up_blocking(self: *Self) void {
             self.get_wake_handle().set();
@@ -180,21 +158,30 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
         }
     };
 }
-// server 2 (polling server)
-// has a list of *atomic_bools + condvars
-// busy loop:
-// if bool is set:
-// unset bool
-// set and potentially wake up thread waiting on condvar
 
+/// Handle that is used by the WakeThread
+pub const WakeUpHandle = struct {
+    const This = @This();
+    inner_handle: *AtomicBool,
+    pub fn wake(self: *const This) void {
+        self.inner_handle.store(true, AtomicOrder.unordered);
+    }
+    pub fn deinit(self: *const This, gpa: Allocator) void {
+        gpa.destroy(self.inner_handle);
+    }
+};
+
+/// you can register std.Thread.ResetEvent, the returned WakeUpHandle can be used to set the ResetEvent in a RealTime Safe manner
+///
+/// this implements a busy loops which checks all wake up handles and calls .set() on the reset Events.
 /// capacity = how many handles can be handled by / added to this Struct at runtime
-pub fn WakeUpThread(comptime capacity: usize) type {
+pub fn RtsWakeUp(comptime capacity: usize) type {
     return struct {
         const Self = @This();
         const ABoolResetEvent = struct { if_wakeup: *AtomicBool, wake_up: *std.Thread.ResetEvent };
 
         counter: usize = 0,
-        thread: CallLoop(WakeStruct),
+        thread: LThreadHandle(WakeStruct),
         fifo: *Fifo(ABoolResetEvent, capacity),
         cleanup_server_slots: []ABoolResetEvent,
         alloc: Allocator,
@@ -205,28 +192,32 @@ pub fn WakeUpThread(comptime capacity: usize) type {
             counter: usize = 0,
             slots: []ABoolResetEvent,
             timer_ns: u64,
-            fn f(self: *wSelf) !ThreadTimeOutNanoSecs {
+            fn f(self: *wSelf) !SleepNanoSeconds {
                 while (self.fifo_ptr.pop()) |b| {
                     self.slots[self.counter] = b;
                     self.counter += 1;
                 }
-                for (self.slots[0..self.counter]) |*x| {
-                    if (x.if_wakeup.load(AtomicOrder.acquire)) {
-                        x.if_wakeup.store(false, AtomicOrder.release);
-                        x.wake_up.set();
+                for (self.slots[0..self.counter]) |*reset_event| {
+                    if (reset_event.if_wakeup.load(AtomicOrder.acquire)) {
+                        reset_event.if_wakeup.store(false, AtomicOrder.release);
+                        reset_event.wake_up.set();
                     }
                 }
-                return ThreadTimeOutNanoSecs{ .SleepInterval = self.timer_ns };
+                return self.timer_ns;
             }
         };
-
+        // poll interval specifies how long the thread sleeps after it checked all wakeup slots
         pub fn init(alloc: Allocator, poll_interval_ns: u64) !Self {
             const server_slots = try alloc.alloc(Self.ABoolResetEvent, capacity);
             errdefer alloc.free(server_slots);
             var fifo = try Fifo(ABoolResetEvent, capacity).init_on_heap(alloc);
             errdefer fifo.deinit();
-            const wakestruct = WakeStruct{ .fifo_ptr = fifo, .slots = server_slots, .timer_ns = poll_interval_ns };
-            const thread = try CallLoop(WakeStruct).init(alloc, wakestruct, WakeStruct.f);
+            const wakestruct = WakeStruct{
+                .fifo_ptr = fifo,
+                .slots = server_slots,
+                .timer_ns = poll_interval_ns,
+            };
+            const thread = try LThreadHandle(WakeStruct).init(alloc, wakestruct, WakeStruct.f);
             errdefer thread.deinit();
             return Self{
                 .thread = thread,
@@ -242,8 +233,8 @@ pub fn WakeUpThread(comptime capacity: usize) type {
             self.alloc.destroy(fifo_ptr);
             self.alloc.free(self.cleanup_server_slots);
         }
-        /// returns AtomicBool pointer. you are responsible to destroy it
-        pub fn add(self: *Self, gpa: Allocator, wakeup_handle: *std.Thread.ResetEvent) !*AtomicBool {
+        /// returns a WakeUpHandle. you are responsible to deinit it
+        pub fn register(self: *Self, gpa: Allocator, wakeup_handle: *std.Thread.ResetEvent) !WakeUpHandle {
             if (self.counter == capacity) {
                 return error.AllWakeUpSlotsAreOccupied;
             }
@@ -252,10 +243,23 @@ pub fn WakeUpThread(comptime capacity: usize) type {
             const rsevent = ABoolResetEvent{ .if_wakeup = atb_ptr, .wake_up = wakeup_handle };
             try self.fifo.push(rsevent);
             self.counter += 1;
-            return atb_ptr;
+            return WakeUpHandle{ .inner_handle = atb_ptr };
         }
-        pub fn get_delegator_thread(gpa: Allocator, comptime ParamUnion: type, comptime RetUnion: type) !DelegatorThread(ParamUnion, RetUnion) {
-            _ = gpa;
-        }
+    };
+}
+pub const RtsDelegatorServerConfig = struct {
+    max_num_delegators: usize = 16,
+    internal_channel_buffersize: usize = 16,
+    D: type,
+    Args: type,
+    Ret: type,
+};
+pub fn RtsDelegatorServer(config: RtsDelegatorServerConfig) type {
+    return struct {
+        const This = @This();
+        const WakeupthreadT = RtsWakeUp(config.max_num_delegators);
+        const DelegatorThreadT = DelegatorThread(config.D, config.Args, config.Ret, config.internal_channel_buffersize);
+        wakeup_thread: RtsWakeUp(config.max_num_delegators),
+        delegator_threads: [config.max_num_delegators]DelegatorThreadT = undefined,
     };
 }
