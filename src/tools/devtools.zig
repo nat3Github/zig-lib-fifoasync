@@ -2,14 +2,14 @@
 const std = @import("std");
 const fifoasync = @import("fifoasync");
 const codegen = fifoasync.codegen.delegator_code;
-const ziggen = fifoasync.ziggen;
+const ziggenfmt = fifoasync.ziggen.SourcePub;
 const example = @import("examplestruct");
 
 pub fn main() !void {
     // this generates an delegator with struct MyStruct from example.zig and writes it to src/generated.zig:
     const MyStruct = example.MyStruct;
     // const fs = std.fs;
-    const src = codegen(MyStruct, "MyStruct", "NewStruct", ziggen.fmt(true).fImport("example_struct", "examplestruct"));
+    const src = codegen(MyStruct, "MyStruct", "NewStruct", ziggenfmt.Import("example_struct", "examplestruct"));
 
     try std.io.getStdOut().writeAll(src);
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);

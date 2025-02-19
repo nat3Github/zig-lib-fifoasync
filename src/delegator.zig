@@ -1,7 +1,7 @@
 const std = @import("std");
 const ziggen = @import("ziggen");
-const zmeta = ziggen.meta;
-const zfmt = ziggen.fmt(true);
+const zmeta = ziggen.Meta;
+const zfmt = ziggen.SourcePub;
 const Type = std.builtin.Type;
 const join = zfmt.join;
 const comptimePrint = std.fmt.comptimePrint;
@@ -13,11 +13,11 @@ const comptimePrint = std.fmt.comptimePrint;
 /// std is already imported
 pub fn delegator_code(
     comptime T: type,
-    comptime nameof_T: []const u8,
-    comptime name: []const u8,
+    nameof_T: []const u8,
+    name: []const u8,
     /// imports are naively inserted at the top of the generated file
-    comptime imports: []const u8,
-) [:0]const u8 {
+    imports: []const u8,
+) []const u8 {
     if (!comptime zmeta.isStruct(T)) {
         @compileError("expected T to be of type Struct");
     }
