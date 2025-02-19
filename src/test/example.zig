@@ -3,7 +3,7 @@ const fs = std.fs;
 const mem = std.mem;
 const heap = std.heap;
 const server = @import("fifoasync");
-const auto_generated_module = @import("xx");
+const auto_generated_module = @import("delegator");
 const MyStruct = @import("examplestruct").MyStruct;
 
 const MILLISECOND: u64 = 1_000_000;
@@ -11,9 +11,8 @@ pub fn main() !void {
     var heapalloc = heap.GeneralPurposeAllocator(.{}){};
     const gpa = heapalloc.allocator();
 
-    // will use the default config
+    // will use the default config you can also use init_ex to set internal queue CAP and delegat num CAP
     const server_config = server.RtsDelegatorServerConfig.init(auto_generated_module);
-
     const T_Server = server.RtsDelegatorServer(server_config);
 
     var sv = try T_Server.init(gpa, 1 * MILLISECOND);

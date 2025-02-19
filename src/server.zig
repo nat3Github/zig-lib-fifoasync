@@ -5,7 +5,8 @@ const spsc = @import("weakrb-spsc.zig");
 const delegator_mod = @import("delegator.zig");
 pub const Codegen = delegator_mod.CodeGen;
 pub const CodeGenConfig = delegator_mod.CodeGenConfig;
-pub const ziggen = @import("ziggen");
+
+const ziggen = @import("ziggen");
 pub const LinkedChannel = spsc.LinkedChannelWeakRB;
 pub const get_bidirectional_channels = spsc.get_bidirectional_linked_channels_rb;
 pub const Fifo = spsc.FifoWeakRB;
@@ -265,12 +266,14 @@ pub const RtsDelegatorServerConfig = struct {
         };
     }
 };
-/// Real time safe Server for use with an auto generated Delegator
+/// Real time safe Server for use with auto generated Delegator
 /// setup your build.zig to autogenerate an Delegator for the struct you want to use asynchronously (look at example.zig and devtools.zig)
 ///
 /// this uses 1 polling server which checks all wake handles and wakes up the respective threads
+/// this uses up to max_num_delegators backround threads that wait to be woken up (through the Delegator)
 ///
 /// max_num_delegators = how often you can call register_delegator
+///
 ///
 /// note: does not free allocated memory
 /// has a constant bound of needed memory (wont allocate indefinitely)
