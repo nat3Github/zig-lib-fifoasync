@@ -1,15 +1,24 @@
 // in here we are goin to generate the delegator structs
 const std = @import("std");
 const fifoasync = @import("fifoasync");
-const codegen = fifoasync.codegen.delegator_code;
+const CodeGen = fifoasync.Codegen;
+const CodeGenConfig = fifoasync.CodeGenConfig;
 const ziggenfmt = fifoasync.ziggen.SourcePub;
 const example = @import("examplestruct");
 
 pub fn main() !void {
     // this generates an delegator with struct MyStruct from example.zig and writes it to src/generated.zig:
-    const MyStruct = example.MyStruct;
     // const fs = std.fs;
-    const src = codegen(MyStruct, "MyStruct", "NewStruct", ziggenfmt.Import("example_struct", "examplestruct"));
+    const config = comptime CodeGenConfig{
+        .T = example.MyStruct,
+        .imports = &.{
+            ziggenfmt.Import_comptime("example_struct", "examplestruct"),
+        },
+    };
+
+    const TCodeGen = CodeGen(config).init();
+    // const src = codegen(MyStruct, "MyStruct", "NewStruct", ziggenfmt.Import("example_struct", "examplestruct"));
+    const src = TCodeGen.generate();
 
     try std.io.getStdOut().writeAll(src);
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);

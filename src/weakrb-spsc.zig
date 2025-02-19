@@ -133,3 +133,6 @@ test "2way channel basic test" {
         try std.testing.expect((ret == casted));
     }
 }
+test "test all refs" {
+    std.testing.refAllDeclsRecursive(@This());
+}

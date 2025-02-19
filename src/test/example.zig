@@ -23,10 +23,10 @@ pub fn main() !void {
     // to safe cpu cycles DelegatorThreads sleeps after work and has to be woken up with the get_wake_handle().set()
 
     // make polling thread to use wait free wake up of the Backround Thread
-    const PollingThread = server.WakeUpThread(1);
+    const PollingThread = server.RtsWakeUp(1);
 
     var wakeup_sv = try PollingThread.init(gpa, 1 * 1_000_000);
-    const wakeup_atomic = try wakeup_sv.add(gpa, server_as.get_wake_handle());
+    const wakeup_atomic = try wakeup_sv.register(gpa, server_as.get_wake_handle());
 
     // MyStructAS is the Delegator struct generated from MyStruct
     var my_struct_as = MyStructAS{

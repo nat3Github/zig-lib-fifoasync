@@ -2,7 +2,9 @@ const std = @import("std");
 const testing = std.testing;
 const Atomic = std.atomic.Value;
 const spsc = @import("weakrb-spsc.zig");
-pub const codegen = @import("delegator.zig");
+const delegator_mod = @import("delegator.zig");
+pub const Codegen = delegator_mod.CodeGen;
+pub const CodeGenConfig = delegator_mod.CodeGenConfig;
 pub const ziggen = @import("ziggen");
 pub const LinkedChannel = spsc.LinkedChannelWeakRB;
 pub const get_bidirectional_channels = spsc.get_bidirectional_linked_channels_rb;
@@ -262,4 +264,8 @@ pub fn RtsDelegatorServer(config: RtsDelegatorServerConfig) type {
         wakeup_thread: RtsWakeUp(config.max_num_delegators),
         delegator_threads: [config.max_num_delegators]DelegatorThreadT = undefined,
     };
+}
+
+test "test all refs" {
+    std.testing.refAllDeclsRecursive(@This());
 }
