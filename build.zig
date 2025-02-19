@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) !void {
     });
     fifoasync_module.addImport("ziggen", ziggen_module);
 
-    const struct_module = b.addModule("examplestruct", .{ .root_source_file = b.path("src/test/example_struct.zig") });
+    const struct_mod = b.addModule("examplestruct", .{ .root_source_file = b.path("src/test/some_struct.zig") });
 
     const src_generator = b.addExecutable(.{
         .name = "dev-src-gen",
@@ -31,12 +31,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = .Debug,
     });
     src_generator.root_module.addImport("fifoasync", fifoasync_module);
-    src_generator.root_module.addImport("examplestruct", struct_module);
+    src_generator.root_module.addImport("examplestruct", struct_mod);
     const src_generator_run = b.addRunArtifact(src_generator);
-    const generated_zig = src_generator_run.addOutputFileArg("xx.zig");
 
+    const generated_zig = src_generator_run.addOutputFileArg("xx.zig");
     const xx_module = b.addModule("xx", .{ .root_source_file = generated_zig });
-    xx_module.addImport("examplestruct", struct_module);
+    xx_module.addImport("examplestruct", struct_mod);
 
     const example_exe = b.addExecutable(.{
         .name = "meta example",
@@ -44,8 +44,9 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+
     example_exe.root_module.addImport("fifoasync", fifoasync_module);
-    // add generated.zig
+    example_exe.root_module.addImport("examplestruct", struct_mod);
     example_exe.root_module.addImport("xx", xx_module);
     b.installArtifact(example_exe);
 

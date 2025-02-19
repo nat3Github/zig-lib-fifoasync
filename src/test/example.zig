@@ -3,51 +3,30 @@ const fs = std.fs;
 const mem = std.mem;
 const heap = std.heap;
 const server = @import("fifoasync");
-const AutoGen = @import("xx");
+const auto_generated_module = @import("xx");
+const MyStruct = @import("examplestruct").MyStruct;
 
+const MILLISECOND: u64 = 1_000_000;
 pub fn main() !void {
     var heapalloc = heap.GeneralPurposeAllocator(.{}){};
     const gpa = heapalloc.allocator();
-    const capacity = 16;
-    const Channel = server.DelegatorChannel(AutoGen.NewStructArgs, AutoGen.NewStructRet, capacity);
-    const MyStructAS = AutoGen.NewStruct(*Channel);
-    const MyStruct = MyStructAS.Type;
-    const MyStructASThread = server.DelegatorThread(MyStructAS, AutoGen.NewStructArgs, AutoGen.NewStructRet, capacity);
 
-    // Setup
+    // will use the default config
+    const server_config = server.RtsDelegatorServerConfig.init(auto_generated_module);
+
+    const T_Server = server.RtsDelegatorServer(server_config);
+
+    var sv = try T_Server.init(gpa, 1 * MILLISECOND);
+
     const instance = MyStruct{};
-    // instantiate Delegator backround Thread
-    var server_as = try MyStructASThread.init(gpa, instance);
-    const channel = server_as.get_channel();
 
-    // to safe cpu cycles DelegatorThreads sleeps after work and has to be woken up with the get_wake_handle().set()
-
-    // make polling thread to use wait free wake up of the Backround Thread
-    const PollingThread = server.RtsWakeUp(1);
-
-    var wakeup_sv = try PollingThread.init(gpa, 1 * 1_000_000);
-    const wakeup_atomic = try wakeup_sv.register(gpa, server_as.get_wake_handle());
-
-    // MyStructAS is the Delegator struct generated from MyStruct
-    var my_struct_as = MyStructAS{
-        // give the channel of the Delegator Thread to MyStructAs
-        .channel = channel,
-        // give the wake handle from the Delegator Thread to MyStructAs that we can wake up the Delegator Thread by calling MyStructAS.wake_up_blocking()
-        .wake_up_event = server_as.get_wake_handle(),
-        // give the atomic we got from WakeUpThread to MyStructAS for waitfree wakeup
-        .wake_up_atomic = wakeup_atomic,
-    };
-    // const handle = server_as.get_wake_handle();
-    // handle.set();
+    var my_struct_as = try sv.register_delegator(instance);
 
     std.time.sleep(2000 * 1_000_000);
     // after that the server goes to sleep
     try my_struct_as.void_fn(0, 0.0);
     try my_struct_as.self_u32_fn();
-    // wake up blocking
-    my_struct_as.wake_up_blocking();
-    // wake up wait free
-    my_struct_as.wake_up_waitfree();
+    my_struct_as.wake() catch unreachable;
     std.debug.print("now wait 3 seconds for timeout\n", .{});
     std.time.sleep(3000 * 1_000_000);
 

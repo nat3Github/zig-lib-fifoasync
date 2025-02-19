@@ -11,16 +11,11 @@ pub fn main() !void {
     // const fs = std.fs;
     const config = comptime CodeGenConfig{
         .T = example.MyStruct,
-        .imports = &.{
-            ziggenfmt.Import_comptime("example_struct", "examplestruct"),
-        },
     };
-
-    const TCodeGen = CodeGen(config).init();
-    // const src = codegen(MyStruct, "MyStruct", "NewStruct", ziggenfmt.Import("example_struct", "examplestruct"));
+    // examplestruct = import where the struct is
+    const TCodeGen = CodeGen(config).init("examplestruct");
     const src = TCodeGen.generate();
 
-    try std.io.getStdOut().writeAll(src);
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();

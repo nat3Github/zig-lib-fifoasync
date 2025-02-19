@@ -10,6 +10,7 @@ pub const LinkedChannel = spsc.LinkedChannelWeakRB;
 pub const get_bidirectional_channels = spsc.get_bidirectional_linked_channels_rb;
 pub const Fifo = spsc.FifoWeakRB;
 const AtomicOrder = std.builtin.AtomicOrder;
+
 const Allocator = std.mem.Allocator;
 
 const AtomicBool = Atomic(bool);
@@ -100,32 +101,25 @@ test "simple call loop" {
 pub const DelegatorChannel = LinkedChannel;
 /// A Blocking thread for auto generated Delegators.
 ///
-/// D: delegator type
+/// T: instance Type
 /// internal channel:
 /// uses Messages for communication:
 /// Args: the Send Type
 /// Ret: the Return Type
 /// capacity the internal capacity of the channel (how many functions do you call at once on a delegator? set this number accordingly)
 ///
-pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type, comptime capacity: comptime_int) type {
+pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
     return struct {
         const Self = @This();
-        const T = D.Type;
-        const Channel = LinkedChannel(Args, Ret, capacity);
-        pub const ServerChannel = LinkedChannel(Ret, Args, capacity);
         const ThreadT = LThreadHandle(S);
         thread: ThreadT,
-        fifo: Channel,
         const S = struct {
             inst: T,
-            channel: ServerChannel,
+            channel: DServerChannel,
         };
         /// launches a background thread with the instances T
         /// the instance then can be called through an Delegator instance
-        pub fn init(alloc: Allocator, instance: T) !Self {
-            const bichannel = try get_bidirectional_channels(alloc, Args, Ret, capacity);
-            const basefifo = bichannel[0];
-            const serverfifo = bichannel[1];
+        pub fn init(alloc: Allocator, instance: T, serverfifo: DServerChannel) !Self {
             const wrapper = S{ .inst = instance, .channel = serverfifo };
             const ff = struct {
                 fn f(
@@ -139,16 +133,14 @@ pub fn DelegatorThread(comptime D: type, comptime Args: type, comptime Ret: type
                     return std.math.maxInt(u64);
                 }
             };
-            return Self{ .thread = try ThreadT.init(alloc, wrapper, ff.f), .fifo = basefifo };
-        }
-        /// get a channel to instantiate a Delegator Instance
-        pub fn get_channel(self: *Self) *DelegatorChannel(Args, Ret, capacity) {
-            return &self.fifo;
+            return Self{
+                .thread = try ThreadT.init(alloc, wrapper, ff.f),
+            };
         }
         /// returns a ResetEvent which wakes up the Delegator Thread when its sleeping
         /// waking is not considered realtime safe
         /// (use WakeUpThread for that)
-        pub fn get_wake_handle(self: *Self) *std.Thread.ResetEvent {
+        pub fn get_wake_handle(self: *const Self) *std.Thread.ResetEvent {
             return self.thread.reset_event;
         }
         pub fn wake_up_blocking(self: *Self) void {
@@ -250,19 +242,82 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
     };
 }
 pub const RtsDelegatorServerConfig = struct {
+    const This = @This();
     max_num_delegators: usize = 16,
     internal_channel_buffersize: usize = 16,
-    D: type,
+    D: fn (type, type) type,
     Args: type,
     Ret: type,
+    pub fn init(import: anytype) This {
+        return This{
+            .Args = @field(import, delegator_mod.RESERVED_ARGS),
+            .Ret = @field(import, delegator_mod.RESERVED_RET),
+            .D = @field(import, delegator_mod.RESERVED_NAME),
+        };
+    }
+    pub fn init_ex(import: anytype, delegator_cap: usize, channel_msg_cap: usize) This {
+        return This{
+            .Args = @field(import, delegator_mod.RESERVED_ARGS),
+            .Ret = @field(import, delegator_mod.RESERVED_RET),
+            .D = @field(import, delegator_mod.RESERVED_NAME),
+            .max_num_delegators = delegator_cap,
+            .internal_channel_buffersize = channel_msg_cap,
+        };
+    }
 };
+/// Real time safe Server for use with an auto generated Delegator
+/// setup your build.zig to autogenerate an Delegator for the struct you want to use asynchronously (look at example.zig and devtools.zig)
+///
+/// this uses 1 polling server which checks all wake handles and wakes up the respective threads
+///
+/// max_num_delegators = how often you can call register_delegator
+///
+/// note: does not free allocated memory
+/// has a constant bound of needed memory (wont allocate indefinitely)
 pub fn RtsDelegatorServer(config: RtsDelegatorServerConfig) type {
+    const Args = config.Args;
+    const Ret = config.Ret;
+    const CHANNEL_CAP = config.internal_channel_buffersize;
+    const INSTANCE_CAP = config.max_num_delegators;
+    const T_DChannel = LinkedChannel(Args, Ret, CHANNEL_CAP);
+    const T_DServerChannel = LinkedChannel(Ret, Args, CHANNEL_CAP);
+    const T_WakeupHandle = WakeUpHandle;
+    const T_Delegator = config.D(T_DChannel, T_WakeupHandle);
+    const T = T_Delegator.Type;
+    const T_Wthread = RtsWakeUp(INSTANCE_CAP);
+    const T_DThread = DelegatorThread(T_Delegator, T, T_DServerChannel);
     return struct {
         const This = @This();
-        const WakeupthreadT = RtsWakeUp(config.max_num_delegators);
-        const DelegatorThreadT = DelegatorThread(config.D, config.Args, config.Ret, config.internal_channel_buffersize);
-        wakeup_thread: RtsWakeUp(config.max_num_delegators),
-        delegator_threads: [config.max_num_delegators]DelegatorThreadT = undefined,
+        _dcount: usize = 0,
+        _alloc: Allocator,
+        wakeup_thread: T_Wthread,
+        delegator_threads: [INSTANCE_CAP]T_DThread = undefined,
+        pub fn init(alloc: Allocator, poll_interval_ns: u64) !This {
+            const wkt = try T_Wthread.init(alloc, poll_interval_ns);
+            return This{
+                .wakeup_thread = wkt,
+                ._alloc = alloc,
+            };
+        }
+        // will consume an instance of T and return an Delegator (the autogenerated Delegator)
+        pub fn register_delegator(self: *This, inst: T) !T_Delegator {
+            if (self._dcount == INSTANCE_CAP) {
+                return error.CantRegisterDelegatorLimitIsFull;
+            }
+            const bichannel = try get_bidirectional_channels(self._alloc, Args, Ret, CHANNEL_CAP);
+            const basefifo = bichannel[0];
+            const serverfifo = bichannel[1];
+            const dthread = try T_DThread.init(self._alloc, inst, serverfifo);
+            const re = dthread.get_wake_handle();
+            self.delegator_threads[self._dcount] = dthread;
+            self._dcount += 1;
+            const wh = try self.wakeup_thread.register(self._alloc, re);
+            const del = T_Delegator{
+                .channel = basefifo,
+                .wakeup_handle = wh,
+            };
+            return del;
+        }
     };
 }
 

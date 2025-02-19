@@ -11,14 +11,20 @@ const stringu8 = []const u8;
 pub const CodeGenConfig = struct {
     const This = @This();
     T: type,
-    /// imports are naively inserted at the top of the generated file
-    imports: []const stringu8,
 };
+// note: unlikely somemone would use these as keywords
+pub const RESERVED_DECL = "B1EF4C_DECLS";
+pub const RESERVED_ARGS = "B1EF4C_ARGS";
+pub const RESERVED_RET = "B1EF4C_RET";
+pub const RESERVED_NAME = "B1EF4C_AS";
 /// generates boilerplate source code for turning a struct into a Delegator which forwards the struct fn calls as Union Enum Messages
 /// will only generate functions which are pub
 /// to work properly you must import the file that defines T
 /// and other files which types are used in the methods of T
 /// std is already imported
+///
+/// dont use reserved keywords (see above)
+///
 pub fn CodeGen(config: CodeGenConfig) type {
     if (!zmeta.isStruct(config.T)) {
         @compileError("expected T to be of type Struct");
@@ -31,19 +37,28 @@ pub fn CodeGen(config: CodeGenConfig) type {
         t_name_tag: stringu8,
         t_name_param_union: stringu8,
         t_name_return_union: stringu8,
-        t_typename: stringu8 = @typeName(T),
+        t_reference_path: stringu8,
+        imports: []const stringu8,
         NameCompType: stringu8,
-        pub fn init() This {
+        /// struct import name = the module where T is located;
+        pub fn init(struct_import_name: stringu8) This {
             const xNameCompType = "Channel";
+            const struct_base_import = zmeta.type_name_base(config.T);
+            const struct_name_without_base = zmeta.type_name_without_base(config.T);
+
+            const ximports = &.{
+                zfmt.Import(struct_base_import, struct_import_name),
+            };
             // const _decl_check = zfmt.HasDeclCompileCheck(xNameCompType, "send", "the server type is missing the send method");
-            const struct_name = zmeta.type_name_without_parents(config.T);
-            // const struct_name_as = zconcat(&.{ struct_name, "AS" });
+            const struct_name_as = RESERVED_NAME;
             return This{
-                .t_name = struct_name,
-                .t_name_tag = zconcat(&.{ "", "Decls" }),
-                .t_name_param_union = zconcat(&.{ "", "Args" }),
-                .t_name_return_union = zconcat(&.{ "", "Ret" }),
+                .t_name = struct_name_as,
+                .t_name_tag = RESERVED_DECL,
+                .t_name_param_union = RESERVED_ARGS,
+                .t_name_return_union = RESERVED_RET,
                 .NameCompType = xNameCompType,
+                .t_reference_path = zconcat(&.{ struct_base_import, ".", struct_name_without_base }),
+                .imports = ximports,
             };
         }
         fn delegator_fn_str(self: *const This) stringu8 {
@@ -85,11 +100,11 @@ pub fn CodeGen(config: CodeGenConfig) type {
                 ;
                 var var_v: stringu8 = "";
                 if (args_type.len > 0) var_v = zprint("|v|", .{});
-                scli_i.* = zprint(xfmt, .{ decl, self.t_name_tag, self.t_name_return_union, var_v, xvargs, self.t_typename });
+                scli_i.* = zprint(xfmt, .{ decl, self.t_name_tag, self.t_name_return_union, var_v, xvargs, self.t_reference_path });
             }
             const msg_handler_body = zfmt.Switch("msg", slc);
             const comment = "/// calls the remote type with the right functions and arguments from the ArgUnions and returns a ReturnUnion. \n/// DelegatorServer uses this.\n";
-            const zfn = zfmt.Fn("__message_handler", zconcat(&.{ Nremote, ": *", self.t_typename, ", msg: ", self.t_name_param_union }), self.t_name_return_union, msg_handler_body);
+            const zfn = zfmt.Fn("__message_handler", zconcat(&.{ Nremote, ": *", self.t_reference_path, ", msg: ", self.t_name_param_union }), self.t_name_return_union, msg_handler_body);
             return zconcat(&.{ comment, zfn });
         }
         fn msg_union_fnargs(self: *const This) stringu8 {
@@ -116,29 +131,24 @@ pub fn CodeGen(config: CodeGenConfig) type {
                 \\{s}
                 \\return struct {{
                 \\    channel: {s},
-                \\    wake_up_atomic: ?*std.atomic.Value(bool) = null,
-                \\    wake_up_event: ?*std.Thread.ResetEvent = null,
+                \\    wakeup_handle: ?T,
                 \\    pub const Type = {s};
                 \\    const Self = @This();
                 \\{s}
-                \\    /// wake backround thread through a reset_event (must be initialized)
-                \\    pub fn wake_up_blocking(self: *Self) void {{
-                \\      self.wake_up_event.?.set();
-                \\    }}
-                \\    /// wake backround thread through a atomic bool pointer (must be initialized)
-                \\    pub fn wake_up_waitfree(self: *Self) void {{
-                \\      self.wake_up_atomic.?.store(true, std.builtin.AtomicOrder.unordered);
+                \\    pub fn wake(self: *Self) !void {{
+                \\      const handle = self.wakeup_handle orelse return error.WakeHandleIsNull;
+                \\      handle.wake();
                 \\    }}
                 \\// delegated functions:
                 \\{s}
                 \\}};
             ;
-            const sfn_args = zconcat(&.{ " ", self.NameCompType, ": type" });
+            const sfn_args = zconcat(&.{ " ", self.NameCompType, ": type", ", ", "T : type" });
             const sfn_return = "type";
             // note temporary removed _decl_check check for send function decl of channel
-            const sfn_body = zprint(sfn_body_fmt, .{ "", self.NameCompType, self.t_typename, self.message_handler(), self.delegator_fn_str() });
+            const sfn_body = zprint(sfn_body_fmt, .{ "", self.NameCompType, self.t_reference_path, self.message_handler(), self.delegator_fn_str() });
 
-            const concat_imports = zjoin("\n", config.imports);
+            const concat_imports = zjoin("\n", self.imports);
             const generic_fn = zfmt.Fn(self.t_name, sfn_args, sfn_return, sfn_body);
             const msg_tag_enum = zfmt.Enum(self.t_name_tag, &decls);
 
@@ -210,7 +220,6 @@ fn SoundEngineRemote(Server: type) type {
             const msg = SoundEngineParamUnion{ .releaseGas = .{} };
             self.channel.send(msg);
         }
-        // code gen
     };
 }
 const DummyServer = struct {
