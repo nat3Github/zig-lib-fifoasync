@@ -23,3 +23,7 @@ pub const MyStructOG = struct {
         return k;
     }
 };
+
+test "test all refs" {
+    std.testing.refAllDeclsRecursive(@This());
+}

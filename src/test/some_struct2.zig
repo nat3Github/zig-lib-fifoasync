@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const MyStruct = struct {
-    const Self = @This();
+    const This = @This();
     pub fn void_fn(x: i32, y: f32) void {
         _ = x;
         _ = y;
@@ -11,14 +11,19 @@ pub const MyStruct = struct {
         std.debug.print("takes two i32 returns sum \n", .{});
         return x + y;
     }
-    pub fn self_u32_fn(self: *Self) !u32 {
+    pub fn self_u32_fn(self: *This) !u32 {
         std.debug.print("takes self returns 41_u32\n", .{});
         _ = self;
         return 41;
     }
-    pub fn self_f32_fn(self: *MyStruct, k: f32) f32 {
+    pub fn self_f32_fn(self: *This, k: f32) f32 {
         std.debug.print("takes self and f32 returns f32\n", .{});
         _ = self;
         return k;
+    }
+    pub fn make_measurement(self: *MyStruct) std.time.Instant {
+        const t = std.time.Instant.now() catch unreachable;
+        _ = self;
+        return t;
     }
 };
