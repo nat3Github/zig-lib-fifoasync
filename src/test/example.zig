@@ -12,8 +12,8 @@ pub fn main() !void {
     const gpa = heapalloc.allocator();
 
     // will use the default config you can also use init_ex to set internal queue CAP and delegat num CAP
-    const server_config = server.RtsDelegatorServerConfig.init(auto_generated_module);
-    const T_Server = server.RtsDelegatorServer(server_config);
+    const server_config = server.DelegatorServerConfig.init(auto_generated_module);
+    const T_Server = server.RtsBlockingDelegatorServer(server_config);
 
     var sv = try T_Server.init(gpa);
 
