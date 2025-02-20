@@ -13,12 +13,14 @@ pub fn build(b: *std.Build) !void {
     // ziggen
     const ziggen = b.dependency("ziggen", .{
         .target = target,
-        .optimize = optimize,
+        .optimize = std.builtin.OptimizeMode.ReleaseFast,
     });
     const ziggen_module = ziggen.module("ziggen");
     // make library module
     const fifoasync_module = b.addModule("fifoasync", .{
         .root_source_file = b.path("src/server.zig"),
+        .optimize = optimize,
+        .target = target,
     });
     fifoasync_module.addImport("ziggen", ziggen_module);
 

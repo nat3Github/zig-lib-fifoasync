@@ -15,7 +15,7 @@ pub fn main() !void {
     const server_config = server.RtsDelegatorServerConfig.init(auto_generated_module);
     const T_Server = server.RtsDelegatorServer(server_config);
 
-    var sv = try T_Server.init(gpa, 1 * MILLISECOND);
+    var sv = try T_Server.init(gpa);
 
     const instance = MyStruct{};
 
@@ -24,8 +24,7 @@ pub fn main() !void {
     // after that the server goes to sleep
     // try my_struct_as.void_fn(0, 0.0);
     // try my_struct_as.self_u32_fn();
-    std.debug.print("now wait 3 seconds for timeout\n", .{});
-    std.time.sleep(3000 * 1_000_000);
+
     const MEASUREMENT_NUM = 100;
     var mesarr: [MEASUREMENT_NUM]u64 = std.mem.zeroes([MEASUREMENT_NUM]u64);
     var num: usize = 0;
@@ -57,12 +56,30 @@ pub fn main() !void {
         }
     }
     for (mesarr) |k| {
-        const ns_f: f64 = @floatFromInt(k);
-        const ms: f64 = @floatFromInt(MILLISECOND);
-        const kms = ns_f / ms;
-        std.debug.print("\n{} ms", .{kms});
+        std.debug.print("\n{} ms", .{ns_to_ms_f64(k)});
     }
 
+    std.debug.print("\nmean: {}", .{calc_mean_ms(mesarr[0..])});
+    std.debug.print("\nmax: {}", .{calc_max_ms(mesarr[0..])});
     // wakeup_sv.deinit();
     // server_as.deinit();
+}
+fn ns_to_ms_f64(k: u64) f64 {
+    const ns_f: f64 = @floatFromInt(k);
+    const ms: f64 = @floatFromInt(MILLISECOND);
+    return ns_f / ms;
+}
+fn calc_mean_ms(slc: []u64) f64 {
+    var x: f64 = 0;
+    for (slc) |s| {
+        x += ns_to_ms_f64(s) / @as(f64, @floatFromInt(slc.len));
+    }
+    return x;
+}
+fn calc_max_ms(slc: []u64) f64 {
+    var x: u64 = 0;
+    for (slc) |s| {
+        if (s >= x) x = s;
+    }
+    return ns_to_ms_f64(x);
 }

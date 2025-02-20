@@ -38,18 +38,18 @@ pub fn LThreadHandle(comptime T: type) type {
                     running.store(true, AtomicOrder.seq_cst);
                     var t: T = instancex;
                     var action: SleepNanoSeconds = 0;
-                    std.log.debug("call loop started", .{});
+                    std.log.debug("l thread started", .{});
                     while (running.load(AtomicOrder.unordered)) {
                         reset.reset();
-                        std.log.debug("call loop will go to sleep", .{});
+                        // std.log.debug("call loop will go to sleep", .{});
                         reset.timedWait(action) catch {};
-                        std.log.debug("call loop woke up", .{});
+                        // std.log.debug("call loop woke up", .{});
+                        action = fx(&t) catch |e| {
+                            std.log.err("l thread will exit with error: {any}", .{e});
+                            break;
+                        };
                     }
-                    action = fx(&t) catch |e| {
-                        std.log.err("thread will exit with error: {any}", .{e});
-                        return;
-                    };
-                    std.log.warn("call loop has exited\n", .{});
+                    std.log.warn("l thread has terminated\n", .{});
                 }
             };
             const reset = try alloc.create(std.Thread.ResetEvent);
@@ -112,12 +112,12 @@ pub const DelegatorChannel = LinkedChannel;
 pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
     return struct {
         const Self = @This();
-        const ThreadT = LThreadHandle(S);
-        thread: ThreadT,
         const S = struct {
             inst: T,
             channel: DServerChannel,
         };
+        const ThreadT = LThreadHandle(S);
+        thread: ThreadT,
         /// launches a background thread with the instances T
         /// the instance then can be called through an Delegator instance
         pub fn init(alloc: Allocator, instance: T, serverfifo: DServerChannel) !Self {
@@ -126,6 +126,7 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
                 fn f(
                     self: *S,
                 ) !SleepNanoSeconds {
+                    // std.log.debug("\nwoke up will proces now", .{});
                     while (self.channel.receive()) |msg| {
                         const ret = D.__message_handler(&self.inst, msg);
                         try self.channel.send(ret);
@@ -134,8 +135,10 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
                     return std.math.maxInt(u64);
                 }
             };
+            const t = try ThreadT.init(alloc, wrapper, ff.f);
+            std.log.debug("\nlaunched delegator thread", .{});
             return Self{
-                .thread = try ThreadT.init(alloc, wrapper, ff.f),
+                .thread = t,
             };
         }
         /// returns a ResetEvent which wakes up the Delegator Thread when its sleeping
@@ -186,7 +189,6 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
             fifo_ptr: *Fifo(ABoolResetEvent, capacity),
             counter: usize = 0,
             slots: []ABoolResetEvent,
-            timer_ns: u64,
             fn f(self: *wSelf) !SleepNanoSeconds {
                 while (self.fifo_ptr.pop()) |b| {
                     self.slots[self.counter] = b;
@@ -198,11 +200,11 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
                         reset_event.wake_up.set();
                     }
                 }
-                return self.timer_ns;
+                return 0;
             }
         };
         // poll interval specifies how long the thread sleeps after it checked all wakeup slots
-        pub fn init(alloc: Allocator, poll_interval_ns: u64) !Self {
+        pub fn init(alloc: Allocator) !Self {
             const server_slots = try alloc.alloc(Self.ABoolResetEvent, capacity);
             errdefer alloc.free(server_slots);
             var fifo = try Fifo(ABoolResetEvent, capacity).init_on_heap(alloc);
@@ -210,7 +212,6 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
             const wakestruct = WakeStruct{
                 .fifo_ptr = fifo,
                 .slots = server_slots,
-                .timer_ns = poll_interval_ns,
             };
             const thread = try LThreadHandle(WakeStruct).init(alloc, wakestruct, WakeStruct.f);
             errdefer thread.deinit();
@@ -295,8 +296,8 @@ pub fn RtsDelegatorServer(config: RtsDelegatorServerConfig) type {
         _alloc: Allocator,
         wakeup_thread: T_Wthread,
         delegator_threads: [INSTANCE_CAP]T_DThread = undefined,
-        pub fn init(alloc: Allocator, poll_interval_ns: u64) !This {
-            const wkt = try T_Wthread.init(alloc, poll_interval_ns);
+        pub fn init(alloc: Allocator) !This {
+            const wkt = try T_Wthread.init(alloc);
             return This{
                 .wakeup_thread = wkt,
                 ._alloc = alloc,
