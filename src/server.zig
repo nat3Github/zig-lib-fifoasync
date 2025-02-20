@@ -66,6 +66,31 @@ pub fn LThreadHandle(comptime T: type) type {
         }
     };
 }
+// like LThreadHandle but no control to stop other to return error
+// no sleeping
+pub fn BusyThread(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        pub fn init(alloc: Allocator, instance: T, f: fn (*T) anyerror!void) !void {
+            const thr = struct {
+                fn exe(instancex: T, fx: fn (*T) anyerror!void) void {
+                    var t: T = instancex;
+                    var action: SleepNanoSeconds = 0;
+                    std.log.debug("busy thread started", .{});
+                    while (true) {
+                        action = fx(&t) catch |e| {
+                            std.log.err("busy thread will exit with error: {any}", .{e});
+                            break;
+                        };
+                    }
+                    std.log.warn("busy thread has terminated\n", .{});
+                }
+            };
+            const thread = try std.Thread.spawn(.{ .allocator = alloc }, thr.exe, .{ instance, f });
+            thread.detach();
+        }
+    };
+}
 test "simple call loop" {
     const TestingFn = struct {
         const Self = @This();
@@ -158,7 +183,7 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
 }
 
 /// Handle that is used by the WakeThread
-pub const WakeUpHandle = struct {
+pub const RtsWakeUpHandle = struct {
     const This = @This();
     inner_handle: *AtomicBool,
     pub fn wake(self: *const This) void {
@@ -177,20 +202,19 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
     return struct {
         const Self = @This();
         const ABoolResetEvent = struct { if_wakeup: *AtomicBool, wake_up: *std.Thread.ResetEvent };
-
+        const T_Thread = BusyThread(WakeStruct);
         counter: usize = 0,
-        thread: LThreadHandle(WakeStruct),
         fifo: *Fifo(ABoolResetEvent, capacity),
         cleanup_server_slots: []ABoolResetEvent,
         alloc: Allocator,
-
         const WakeStruct = struct {
             const wSelf = @This();
             fifo_ptr: *Fifo(ABoolResetEvent, capacity),
             counter: usize = 0,
             slots: []ABoolResetEvent,
-            fn f(self: *wSelf) !SleepNanoSeconds {
+            fn f(self: *wSelf) !void {
                 while (self.fifo_ptr.pop()) |b| {
+                    if (self.counter == self.slots.len) return error.RtsWakupNoSlots;
                     self.slots[self.counter] = b;
                     self.counter += 1;
                 }
@@ -200,46 +224,32 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
                         reset_event.wake_up.set();
                     }
                 }
-                return 0;
             }
         };
         // poll interval specifies how long the thread sleeps after it checked all wakeup slots
         pub fn init(alloc: Allocator) !Self {
             const server_slots = try alloc.alloc(Self.ABoolResetEvent, capacity);
-            errdefer alloc.free(server_slots);
-            var fifo = try Fifo(ABoolResetEvent, capacity).init_on_heap(alloc);
-            errdefer fifo.deinit();
+            const fifo = try Fifo(ABoolResetEvent, capacity).init_on_heap(alloc);
             const wakestruct = WakeStruct{
                 .fifo_ptr = fifo,
                 .slots = server_slots,
             };
-            const thread = try LThreadHandle(WakeStruct).init(alloc, wakestruct, WakeStruct.f);
-            errdefer thread.deinit();
+            try T_Thread.init(alloc, wakestruct, WakeStruct.f);
             return Self{
-                .thread = thread,
                 .fifo = fifo,
                 .alloc = alloc,
                 .cleanup_server_slots = server_slots,
             };
         }
-        pub fn deinit(self: *Self) void {
-            self.thread.deinit();
-            self.fifo.deinit();
-            const fifo_ptr: *Fifo(ABoolResetEvent, capacity) = self.fifo;
-            self.alloc.destroy(fifo_ptr);
-            self.alloc.free(self.cleanup_server_slots);
-        }
         /// returns a WakeUpHandle. you are responsible to deinit it
-        pub fn register(self: *Self, gpa: Allocator, wakeup_handle: *std.Thread.ResetEvent) !WakeUpHandle {
-            if (self.counter == capacity) {
-                return error.AllWakeUpSlotsAreOccupied;
-            }
+        pub fn register(self: *Self, gpa: Allocator, wakeup_handle: *std.Thread.ResetEvent) !RtsWakeUpHandle {
+            if (self.counter == capacity) return error.AllWakeUpSlotsAreOccupied;
             const atb_ptr = try gpa.create(AtomicBool);
             atb_ptr.* = AtomicBool.init(false);
             const rsevent = ABoolResetEvent{ .if_wakeup = atb_ptr, .wake_up = wakeup_handle };
             try self.fifo.push(rsevent);
             self.counter += 1;
-            return WakeUpHandle{ .inner_handle = atb_ptr };
+            return RtsWakeUpHandle{ .inner_handle = atb_ptr };
         }
     };
 }
@@ -285,7 +295,7 @@ pub fn RtsDelegatorServer(config: RtsDelegatorServerConfig) type {
     const INSTANCE_CAP = config.max_num_delegators;
     const T_DChannel = LinkedChannel(Args, Ret, CHANNEL_CAP);
     const T_DServerChannel = LinkedChannel(Ret, Args, CHANNEL_CAP);
-    const T_WakeupHandle = WakeUpHandle;
+    const T_WakeupHandle = RtsWakeUpHandle;
     const T_Delegator = config.D(T_DChannel, T_WakeupHandle);
     const T = T_Delegator.Type;
     const T_Wthread = RtsWakeUp(INSTANCE_CAP);
@@ -305,9 +315,7 @@ pub fn RtsDelegatorServer(config: RtsDelegatorServerConfig) type {
         }
         // will consume an instance of T and return an Delegator (the autogenerated Delegator)
         pub fn register_delegator(self: *This, inst: T) !T_Delegator {
-            if (self._dcount == INSTANCE_CAP) {
-                return error.CantRegisterDelegatorLimitIsFull;
-            }
+            if (self._dcount == INSTANCE_CAP) return error.CantRegisterDelegatorLimitIsFull;
             const bichannel = try get_bidirectional_channels(self._alloc, Args, Ret, CHANNEL_CAP);
             const basefifo = bichannel[0];
             const serverfifo = bichannel[1];
