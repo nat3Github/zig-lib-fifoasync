@@ -75,10 +75,9 @@ pub fn BusyThread(comptime T: type) type {
             const thr = struct {
                 fn exe(instancex: T, fx: fn (*T) anyerror!void) void {
                     var t: T = instancex;
-                    var action: SleepNanoSeconds = 0;
                     std.log.debug("busy thread started", .{});
                     while (true) {
-                        action = fx(&t) catch |e| {
+                        fx(&t) catch |e| {
                             std.log.err("busy thread will exit with error: {any}", .{e});
                             break;
                         };
