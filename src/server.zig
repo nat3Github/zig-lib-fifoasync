@@ -212,7 +212,7 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
             counter: usize = 0,
             slots: []ABoolResetEvent,
             fn f(self: *wSelf) !void {
-                while (self.fifo_ptr.pop()) |b| {
+                if (self.fifo_ptr.pop()) |b| {
                     if (self.counter == self.slots.len) return error.RtsWakupNoSlots;
                     self.slots[self.counter] = b;
                     self.counter += 1;

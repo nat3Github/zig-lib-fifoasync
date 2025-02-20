@@ -13,27 +13,23 @@ pub fn main() !void {
 
     // will use the default config you can also use init_ex to set internal queue CAP and delegat num CAP
     const server_config = server.DelegatorServerConfig.init(auto_generated_module);
-    const T_Server = server.RtsBlockingDelegatorServer(server_config);
+    // set server type (RtsDelegatorServer or BlockingDelegatorServer);
+    // for real time safe use use Rts otherwise use Blocking
+    const T_Server = server.RtsDelegatorServer(server_config);
 
     var sv = try T_Server.init(gpa);
-
     const instance = MyStruct{};
-
     var my_struct_as = try sv.register_delegator(instance);
-
-    // after that the server goes to sleep
-    // try my_struct_as.void_fn(0, 0.0);
-    // try my_struct_as.self_u32_fn();
 
     const MEASUREMENT_NUM = 100;
     var mesarr: [MEASUREMENT_NUM]u64 = std.mem.zeroes([MEASUREMENT_NUM]u64);
     var num: usize = 0;
-    var inst: std.time.Instant = undefined;
 
     for (0..MEASUREMENT_NUM) |_| {
-        my_struct_as.make_measurement() catch unreachable;
+        var timer = std.time.Timer.start() catch unreachable;
+        timer.reset();
+        my_struct_as.make_measurement(timer) catch unreachable;
         my_struct_as.wake() catch unreachable;
-        inst = std.time.Instant.now() catch unreachable;
 
         std.Thread.sleep(10 * MILLISECOND);
 
@@ -46,8 +42,7 @@ pub fn main() !void {
                 .self_u32_fn => |r| {
                     std.debug.print("{any} was returned\n", .{r});
                 },
-                .make_measurement => |k| {
-                    const time_ns = std.time.Instant.since(k, inst);
+                .make_measurement => |time_ns| {
                     mesarr[num] = time_ns;
                     num += 1;
                 },

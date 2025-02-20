@@ -21,8 +21,9 @@ pub const MyStruct = struct {
         _ = self;
         return k;
     }
-    pub fn make_measurement(self: *MyStruct) std.time.Instant {
-        const t = std.time.Instant.now() catch unreachable;
+    pub fn make_measurement(self: *MyStruct, timer: std.time.Timer) u64 {
+        var time = timer;
+        const t = time.read();
         _ = self;
         return t;
     }
