@@ -132,6 +132,8 @@ pub fn CodeGen(config: CodeGenConfig) type {
                 \\return struct {{
                 \\    channel: {s},
                 \\    wakeup_handle: ?T,
+                \\/// for waiting for an result
+                \\    wait_handle: ?T2,
                 \\    pub const Type = {s};
                 \\    const Self = @This();
                 \\{s}
@@ -143,7 +145,7 @@ pub fn CodeGen(config: CodeGenConfig) type {
                 \\{s}
                 \\}};
             ;
-            const sfn_args = zconcat(&.{ " ", self.NameCompType, ": type", ", ", "T : type" });
+            const sfn_args = zconcat(&.{ " ", self.NameCompType, ": type", ", ", "T : type", ",", "T2 : type" });
             const sfn_return = "type";
             // note temporary removed _decl_check check for send function decl of channel
             const sfn_body = zprint(sfn_body_fmt, .{ "", self.NameCompType, self.t_reference_path, self.message_handler(), self.delegator_fn_str() });

@@ -18,6 +18,9 @@ const AtomicBool = Atomic(bool);
 var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
 const test_gpa = heapalloc.allocator();
 
+const zahl2: f32 = 0.5;
+const zahl: u64 = 0;
+
 const SleepNanoSeconds = u64;
 /// wraps a thread that owns an instance of T and calls T repeatedly with f
 /// if f returns an error this thread will stop!
@@ -27,11 +30,8 @@ pub fn LThreadHandle(comptime T: type) type {
     return struct {
         const Self = @This();
         running: *AtomicBool,
-        reset_event: *std.Thread.ResetEvent,
+        wake_lthread: *std.Thread.ResetEvent,
         alloc: Allocator,
-        pub fn get_reset_event(self: *const Self) *std.Thread.ResetEvent {
-            return self.reset_event;
-        }
         pub fn init(alloc: Allocator, instance: T, f: fn (*T) anyerror!SleepNanoSeconds) !Self {
             const thr = struct {
                 fn exe(instancex: T, fx: fn (*T) anyerror!SleepNanoSeconds, running: *Atomic(bool), reset: *std.Thread.ResetEvent) void {
@@ -60,7 +60,7 @@ pub fn LThreadHandle(comptime T: type) type {
             thread.detach();
             return Self{
                 .running = running,
-                .reset_event = reset,
+                .wake_lthread = reset,
                 .alloc = alloc,
             };
         }
@@ -68,27 +68,22 @@ pub fn LThreadHandle(comptime T: type) type {
 }
 // like LThreadHandle but no control to stop other to return error
 // no sleeping
-pub fn BusyThread(comptime T: type) type {
-    return struct {
-        const Self = @This();
-        pub fn init(alloc: Allocator, instance: T, f: fn (*T) anyerror!void) !void {
-            const thr = struct {
-                fn exe(instancex: T, fx: fn (*T) anyerror!void) void {
-                    var t: T = instancex;
-                    std.log.debug("busy thread started", .{});
-                    while (true) {
-                        fx(&t) catch |e| {
-                            std.log.err("busy thread will exit with error: {any}", .{e});
-                            break;
-                        };
-                    }
-                    std.log.warn("busy thread has terminated\n", .{});
-                }
-            };
-            const thread = try std.Thread.spawn(.{ .allocator = alloc }, thr.exe, .{ instance, f });
-            thread.detach();
+pub fn BusyThread(T: type, alloc: Allocator, instance: T, f: fn (*T) anyerror!void) !void {
+    const thr = struct {
+        fn exe(instancex: T, fx: fn (*T) anyerror!void) void {
+            var t: T = instancex;
+            std.log.debug("busy thread started", .{});
+            while (true) {
+                fx(&t) catch |e| {
+                    std.log.err("busy thread will exit with error: {any}", .{e});
+                    break;
+                };
+            }
+            std.log.warn("busy thread has terminated\n", .{});
         }
     };
+    const thread = try std.Thread.spawn(.{ .allocator = alloc }, thr.exe, .{ instance, f });
+    thread.detach();
 }
 test "simple call loop" {
     const TestingFn = struct {
@@ -127,11 +122,14 @@ pub const DelegatorChannel = LinkedChannel;
 /// A Blocking thread for auto generated Delegators.
 ///
 /// T: instance Type
+/// D: auto generated Delegator type
 /// internal channel:
 /// uses Messages for communication:
 /// Args: the Send Type
 /// Ret: the Return Type
 /// capacity the internal capacity of the channel (how many functions do you call at once on a delegator? set this number accordingly)
+///
+/// Delegator Thread ResetEvent
 ///
 pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
     return struct {
@@ -139,13 +137,22 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
         const S = struct {
             inst: T,
             channel: DServerChannel,
+            re: *std.Thread.ResetEvent,
         };
         const ThreadT = LThreadHandle(S);
-        thread: ThreadT,
+
+        lthread: ThreadT,
+        wait_for_lthread: *std.Thread.ResetEvent,
         /// launches a background thread with the instances T
         /// the instance then can be called through an Delegator instance
         pub fn init(alloc: Allocator, instance: T, serverfifo: DServerChannel) !Self {
-            const wrapper = S{ .inst = instance, .channel = serverfifo };
+            const r = try alloc.create(std.Thread.ResetEvent);
+            const wrapper =
+                S{
+                .inst = instance,
+                .channel = serverfifo,
+                .re = r,
+            };
             const ff = struct {
                 fn f(
                     self: *S,
@@ -154,6 +161,7 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
                     while (self.channel.receive()) |msg| {
                         const ret = D.__message_handler(&self.inst, msg);
                         try self.channel.send(ret);
+                        self.re.set();
                     }
                     // sleep maximum amount
                     return std.math.maxInt(u64);
@@ -161,22 +169,7 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
             };
             const t = try ThreadT.init(alloc, wrapper, ff.f);
             std.log.debug("\nlaunched delegator thread", .{});
-            return Self{
-                .thread = t,
-            };
-        }
-        /// returns a ResetEvent which wakes up the Delegator Thread when its sleeping
-        /// waking is not considered realtime safe
-        /// (use WakeUpThread for that)
-        pub fn get_wake_handle(self: *const Self) *std.Thread.ResetEvent {
-            return self.thread.reset_event;
-        }
-        pub fn wake_up_blocking(self: *Self) void {
-            self.get_wake_handle().set();
-        }
-        pub fn deinit(self: *Self) void {
-            self.fifo.deinit();
-            self.thread.deinit();
+            return Self{ .lthread = t, .wait_for_lthread = r };
         }
     };
 }
@@ -201,7 +194,6 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
     return struct {
         const Self = @This();
         const ABoolResetEvent = struct { if_wakeup: *AtomicBool, wake_up: *std.Thread.ResetEvent };
-        const T_Thread = BusyThread(WakeStruct);
         counter: usize = 0,
         fifo: *Fifo(ABoolResetEvent, capacity),
         cleanup_server_slots: []ABoolResetEvent,
@@ -233,7 +225,7 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
                 .fifo_ptr = fifo,
                 .slots = server_slots,
             };
-            try T_Thread.init(alloc, wakestruct, WakeStruct.f);
+            try BusyThread(WakeStruct, alloc, wakestruct, WakeStruct.f);
             return Self{
                 .fifo = fifo,
                 .alloc = alloc,
@@ -256,7 +248,7 @@ pub const DelegatorServerConfig = struct {
     const This = @This();
     max_num_delegators: usize = 16,
     internal_channel_buffersize: usize = 16,
-    D: fn (type, type) type,
+    D: fn (type, type, type) type,
     Args: type,
     Ret: type,
     pub fn init(import: anytype) This {
@@ -295,7 +287,7 @@ pub fn RtsDelegatorServer(config: DelegatorServerConfig) type {
     const T_DChannel = LinkedChannel(Args, Ret, CHANNEL_CAP);
     const T_DServerChannel = LinkedChannel(Ret, Args, CHANNEL_CAP);
     const T_WakeupHandle = RtsWakeUpHandle;
-    const T_Delegator = config.D(T_DChannel, T_WakeupHandle);
+    const T_Delegator = config.D(T_DChannel, T_WakeupHandle, *std.Thread.ResetEvent);
     const T = T_Delegator.Type;
     const T_Wthread = RtsWakeUp(INSTANCE_CAP);
     const T_DThread = DelegatorThread(T_Delegator, T, T_DServerChannel);
@@ -319,13 +311,13 @@ pub fn RtsDelegatorServer(config: DelegatorServerConfig) type {
             const basefifo = bichannel[0];
             const serverfifo = bichannel[1];
             const dthread = try T_DThread.init(self._alloc, inst, serverfifo);
-            const re = dthread.get_wake_handle();
             self.delegator_threads[self._dcount] = dthread;
             self._dcount += 1;
-            const wh = try self.wakeup_thread.register(self._alloc, re);
+            const wh = try self.wakeup_thread.register(self._alloc, dthread.lthread.wake_lthread);
             const del = T_Delegator{
                 .channel = basefifo,
                 .wakeup_handle = wh,
+                .wait_handle = dthread.wait_for_lthread,
             };
             return del;
         }
@@ -370,7 +362,7 @@ pub fn BlockingDelegatorServer(config: DelegatorServerConfig) type {
             const basefifo = bichannel[0];
             const serverfifo = bichannel[1];
             const dthread = try T_DThread.init(self._alloc, inst, serverfifo);
-            const re = dthread.get_wake_handle();
+            const re = dthread.lthread.wake_lthread;
             self.delegator_threads[self._dcount] = dthread;
             self._dcount += 1;
             const wh = BlockingWakeUpHandle{ .inner_handle = re };
