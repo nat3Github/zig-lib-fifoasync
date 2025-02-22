@@ -58,6 +58,7 @@ pub fn main() !void {
     std.debug.print("\nmax: {}", .{calc_max_ms(mesarr[0..])});
     // wakeup_sv.deinit();
     // server_as.deinit();
+    test_polling_server(gpa);
 }
 fn ns_to_ms_f64(k: u64) f64 {
     const ns_f: f64 = @floatFromInt(k);
@@ -77,4 +78,44 @@ fn calc_max_ms(slc: []u64) f64 {
         if (s >= x) x = s;
     }
     return ns_to_ms_f64(x);
+}
+const Fifo = @import("fifoasync").Fifo;
+const Timer = std.time.Timer;
+fn test_polling_server(aalc: std.mem.Allocator) !void {
+    const FifoT = Fifo(Timer, 32);
+    const S = struct {
+        fifo: FifoT,
+        pub fn f(fifo: FifoT) void {
+            var arr = std.mem.zeroes([100]u64);
+            var c: usize = 0;
+            while (true) {
+                if (c == arr.len) break;
+                if (fifo.pop()) |p| {
+                    arr[c] = p.read();
+                    c += 1;
+                }
+            }
+            const mean = calc_mean_ms(arr[0..]);
+            const max = calc_max_ms(arr[0..]);
+            const fmt =
+                \\ timings of polling thread: 
+                \\  mean: {d:.3}
+                \\
+                \\  max: {d:.3}
+            ;
+            std.debug.print(fmt, .{ mean, max });
+        }
+    };
+    const fifo = try FifoT.init_on_heap(aalc);
+    const h = try std.Thread.spawn(.{ .allocator = aalc }, S.f, .{
+        fifo,
+    });
+    h.detach();
+
+    for (0.100) |_| {
+        const t = Timer.start() catch unreachable;
+        fifo.push(t);
+        std.Thread.sleep(1 * 1000 * 1000);
+    }
+    std.Thread.sleep(20 * 1000 * 1000);
 }

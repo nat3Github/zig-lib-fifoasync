@@ -7,6 +7,7 @@ pub const Codegen = delegator_mod.CodeGen;
 pub const CodeGenConfig = delegator_mod.CodeGenConfig;
 
 const ziggen = @import("ziggen");
+pub const sleep = @import("sleep.zig");
 pub const LinkedChannel = spsc.LinkedChannelWeakRB;
 pub const get_bidirectional_channels = spsc.get_bidirectional_linked_channels_rb;
 pub const Fifo = spsc.FifoWeakRB;
@@ -18,15 +19,12 @@ const AtomicBool = Atomic(bool);
 var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
 const test_gpa = heapalloc.allocator();
 
-const zahl2: f32 = 0.5;
-const zahl: u64 = 0;
-
 const SleepNanoSeconds = u64;
 /// wraps a thread that owns an instance of T and calls T repeatedly with f
 /// if f returns an error this thread will stop!
 /// the thread will sleep for the returned nanoseconds value
 /// it can be woken up by using the reset_event field of this struct (using reset_event.set())
-pub fn LThreadHandle(comptime T: type) type {
+pub fn WakeAbleThread(comptime T: type) type {
     return struct {
         const Self = @This();
         running: *AtomicBool,
@@ -41,9 +39,7 @@ pub fn LThreadHandle(comptime T: type) type {
                     std.log.debug("l thread started", .{});
                     while (running.load(AtomicOrder.unordered)) {
                         reset.reset();
-                        // std.log.debug("call loop will go to sleep", .{});
                         reset.timedWait(action) catch {};
-                        // std.log.debug("call loop woke up", .{});
                         action = fx(&t) catch |e| {
                             std.log.err("l thread will exit with error: {any}", .{e});
                             break;
@@ -99,7 +95,7 @@ test "simple call loop" {
         }
     };
     const x = TestingFn{};
-    const calloop = try LThreadHandle(TestingFn).init(test_gpa, x, TestingFn.f);
+    const calloop = try WakeAbleThread(TestingFn).init(test_gpa, x, TestingFn.f);
     for (0..6) |i| {
         std.time.sleep(1 * 1_000_000);
         std.debug.print("base thread: {}\n", .{i});
@@ -139,7 +135,7 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
             channel: DServerChannel,
             re: *std.Thread.ResetEvent,
         };
-        const ThreadT = LThreadHandle(S);
+        const ThreadT = WakeAbleThread(S);
 
         lthread: ThreadT,
         wait_for_lthread: *std.Thread.ResetEvent,
@@ -375,6 +371,226 @@ pub fn BlockingDelegatorServer(config: DelegatorServerConfig) type {
     };
 }
 
+const builtin = @import("builtin");
+const os_tag = builtin.target.os.tag;
+
+fn sub_or_zero(a: u64, b: u64) u64 {
+    return a - @min(a, b);
+}
+pub const SEC = 1000 * MILLI;
+pub const MILLI = 1000 * MICRO;
+pub const MICRO = 1_000;
+/// use this with buffer sizes that have more leeway (big buffers) -> less spinning, more efficient!
+/// use this with tight buffer sizes and rather poll on next event
+const RtSleep = struct {
+    const This = @This();
+    /// i.e. windows sleep cant sleep shorter than 1 ms
+    lower_bound: u64,
+    /// assumed that
+    pos_max_derivation: u64,
+    neg_max_derivation: u64,
+
+    fn sleep(nano_seconds: u64) void {
+        if (nano_seconds > MILLI) {
+            switch (os_tag) {
+                .linux, .macos => {
+                    // linux sleep is to be assumed correct for sub milliseconds;
+                    // i have read that sometime it sleeps longer that that, must test that!
+                    std.Thread.sleep(nano_seconds);
+                },
+                .windows => {
+                    // windows clock cant sleep shorter than 1 ms spin-wait
+                    const ms = nano_seconds / MILLI;
+                    std.Thread(ms);
+                },
+                else => @compileError("OS is not Supported"),
+            }
+        } else {
+            switch (os_tag) {
+                .linux => {
+                    // linux sleep is to be assumed correct for sub milliseconds;
+                    // i have read that sometime it sleeps longer that that, must test that!
+                    const sleep_alt = sub_or_zero(nano_seconds, 500 * MICRO);
+                    if (sleep_alt > 0) {
+                        std.Thread.sleep(nano_seconds);
+                    }
+                },
+                .windows => {
+                    // windows clock cant sleep shorter than 1 ms spin-wait
+                    const ms = nano_seconds / MILLI;
+                    // const rem = nano_seconds - ms * MILLI;
+                    if (ms > 0) {
+                        std.Thread(ms);
+                    }
+                },
+                .macos => {
+                    // no idea have to test is assumed to be like linux
+                    std.Thread.sleep(nano_seconds);
+                },
+                else => @compileError("OS is not Supported"),
+            }
+        }
+    }
+};
+
+// times the sleep function at runtime
+const RtsSleepOptimizer = struct {
+    const This = @This();
+    result: RtSleep,
+    /// uses the default timings for the os
+    pub fn init_os_default_timings() This {
+        const rts = switch (os_tag) {
+            .linux => RtSleep{
+                .lower_bound = 0,
+                .pos_max_derivation = 0,
+                .neg_max_derivation = 0,
+            },
+            .windows => RtSleep{
+                .lower_bound = 0,
+                .pos_max_derivation = 0,
+                .neg_max_derivation = 0,
+            },
+            else => @compileError("unsupported OS"),
+        };
+        return This{
+            .result = rts,
+        };
+    }
+    /// performs timing measurements of the system
+    const PASSES = 128;
+    pub fn init_measure_timings_on_local_thread() !This {
+        var t = try Timer.start();
+        var timings = std.mem.zeroes([PASSES]u64);
+        const interval = 1 * MILLI;
+        for (0..PASSES) |i| {
+            t.reset();
+            std.Thread.sleep(interval);
+            timings[i] = t.read();
+        }
+        const test_lower_bound: []const u64 = &.{ 2000, 1000, 500, 250, 100, 50, 5 };
+        var lb = test_lower_bound[0] * MILLI;
+        for (test_lower_bound) |tlb| {
+            const tt = tlb * MICRO;
+            lb = tt;
+            t.reset();
+            std.Thread.sleep(tt);
+            const tx = t.read();
+            if (tx < (tt * 3) / 4) {
+                break;
+            }
+        }
+        const stat = get_pos_max(timings[0..], interval);
+        return This{
+            .result = RtSleep{
+                .lower_bound = lb,
+                .pos_max_derivation = stat[0],
+                .neg_max_derivation = stat[1],
+            },
+        };
+    }
+    fn get_pos_max(dat: []u64, cmp: u64) [2]u64 {
+        var pos: u64 = 0;
+        var neg: u64 = 0;
+        var avg: f64 = 0;
+        for (dat) |x| {
+            const sp = sub_or_zero(x, cmp);
+            const sn = sub_or_zero(cmp, x);
+            pos = @max(sp, pos);
+            neg = @max(sn, pos);
+            const abs = @max(sp, sn);
+            avg += @as(f64, @floatFromInt(abs)) / @as(f64, @floatFromInt(dat.len));
+        }
+
+        const fmt =
+            \\
+            \\ stats:
+            \\ avg derivation = {d:.3}
+            \\
+        ;
+
+        std.debug.print(fmt, .{avg / MILLI});
+        return .{ pos, neg };
+    }
+    pub fn create_rt_sleep(self: *const This) RtSleep {
+        return self.result;
+    }
+};
+
+test "test sleeping" {
+    std.testing.refAllDecls(@This());
+    const rtso = RtsSleepOptimizer.init_measure_timings_on_local_thread() catch unreachable;
+    const rst = rtso.create_rt_sleep();
+    const fmt =
+        \\
+        \\RtSleep measurements:
+        \\ lower bound : {}
+        \\ max derivation negative: {}
+        \\ max derivation positive: {}
+        \\
+    ;
+    std.debug.print(fmt, .{
+        rst.lower_bound,
+        rst.neg_max_derivation,
+        rst.pos_max_derivation,
+    });
+}
+
+/// NOTE:
+/// sleeping on windows is absolutlely no serious thing to consider
+/// as ist is for now it is in fact not usable at all for timed thread synchronization
+/// did not test on linux but with this mess in windows we have to find a better way than just infinetly polling on all threads:
+/// NOTE: proposal:
+/// schedule waking a thread with sub ms accuracy:
+/// use busy thread that wakes up sleeping threads
+const ScheduleWakeConfig = struct {
+    /// how many wake handles are processed
+    slots: usize = 1024,
+};
+const ResetEvent = std.Thread.ResetEvent;
+const Timer = std.time.Timer;
+const AtomicScheduleTime = Atomic(ScheduleTime);
+const ScheduleTime = struct {
+    time_nano: ?u64 = null,
+    timer: Timer = undefined,
+};
+const ScheduleWakeHandle = struct {
+    re: *ResetEvent,
+    att: *AtomicScheduleTime,
+};
+
+/// this is an improvement over just waking the thread through a busy polling thread
+/// this has the advantage of waking before time so a Background Thread can be woken up before
+/// it receives a task so it can poll on the task till its available
+/// this should be lower latency
+pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
+    return struct {
+        const This = @This();
+        const T_Lthread = WakeAbleThread(T);
+        thread: T_Lthread,
+        const T = struct {
+            handles: [cfg.slots]ScheduleWakeHandle,
+            compensation: u64 = 0,
+            local_timer: Timer = null,
+            fn f(self: *T) !u64 {
+                if (self.local_timer == null) self.local_timer = Timer.start() catch unreachable;
+                for (self.handles) |h| {
+                    const x = h.att.load(.unordered);
+                    if (x.time_nano) |t| {
+                        if (x.timer.read() >= t) h.re.set();
+                    }
+                }
+                const time_to_turn = self.local_timer.lap();
+                self.compensation = (time_to_turn + self.compensation) / 2;
+                return 0;
+            }
+        };
+        pub fn init(alloc: Allocator, hndles: [cfg.slots]ScheduleWakeHandle) !This {
+            const ins = T{ .handles = hndles };
+            const t = try T_Lthread.init(alloc, ins, T.f);
+            return This{ .thread = t };
+        }
+    };
+}
 test "test all refs" {
     std.testing.refAllDeclsRecursive(@This());
 }
