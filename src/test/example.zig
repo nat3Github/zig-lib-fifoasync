@@ -51,14 +51,14 @@ pub fn main() !void {
         }
     }
     for (mesarr) |k| {
-        std.debug.print("\n{} ms", .{ns_to_ms_f64(k)});
+        std.debug.print("\n {d:.3} ms", .{ns_to_ms_f64(k)});
     }
 
-    std.debug.print("\nmean: {}", .{calc_mean_ms(mesarr[0..])});
-    std.debug.print("\nmax: {}", .{calc_max_ms(mesarr[0..])});
+    std.debug.print("\nmean: {d:.3}", .{calc_mean_ms(mesarr[0..])});
+    std.debug.print("\nmax: {d:.3}", .{calc_max_ms(mesarr[0..])});
     // wakeup_sv.deinit();
     // server_as.deinit();
-    test_polling_server(gpa);
+    try test_polling_server(gpa);
 }
 fn ns_to_ms_f64(k: u64) f64 {
     const ns_f: f64 = @floatFromInt(k);
@@ -85,23 +85,26 @@ fn test_polling_server(aalc: std.mem.Allocator) !void {
     const FifoT = Fifo(Timer, 32);
     const S = struct {
         fifo: FifoT,
-        pub fn f(fifo: FifoT) void {
+        pub fn f(fifo: *FifoT) void {
             var arr = std.mem.zeroes([100]u64);
             var c: usize = 0;
             while (true) {
                 if (c == arr.len) break;
                 if (fifo.pop()) |p| {
-                    arr[c] = p.read();
+                    var t = p;
+                    arr[c] = t.read();
                     c += 1;
                 }
             }
             const mean = calc_mean_ms(arr[0..]);
             const max = calc_max_ms(arr[0..]);
             const fmt =
-                \\ timings of polling thread: 
-                \\  mean: {d:.3}
                 \\
-                \\  max: {d:.3}
+                \\
+                \\ timings of polling thread: 
+                \\  mean: {d:.3} ms
+                \\
+                \\  max: {d:.3} ms
             ;
             std.debug.print(fmt, .{ mean, max });
         }
@@ -112,9 +115,9 @@ fn test_polling_server(aalc: std.mem.Allocator) !void {
     });
     h.detach();
 
-    for (0.100) |_| {
+    for (0..100) |_| {
         const t = Timer.start() catch unreachable;
-        fifo.push(t);
+        try fifo.push(t);
         std.Thread.sleep(1 * 1000 * 1000);
     }
     std.Thread.sleep(20 * 1000 * 1000);

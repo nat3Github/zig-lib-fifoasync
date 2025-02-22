@@ -7,7 +7,6 @@ pub const Codegen = delegator_mod.CodeGen;
 pub const CodeGenConfig = delegator_mod.CodeGenConfig;
 
 const ziggen = @import("ziggen");
-pub const sleep = @import("sleep.zig");
 pub const LinkedChannel = spsc.LinkedChannelWeakRB;
 pub const get_bidirectional_channels = spsc.get_bidirectional_linked_channels_rb;
 pub const Fifo = spsc.FifoWeakRB;
@@ -548,14 +547,24 @@ const ScheduleWakeConfig = struct {
 };
 const ResetEvent = std.Thread.ResetEvent;
 const Timer = std.time.Timer;
-const AtomicScheduleTime = Atomic(ScheduleTime);
-const ScheduleTime = struct {
+pub const AtomicScheduleTime = Atomic(ScheduleTime);
+
+pub const ScheduleTime = struct {
     time_nano: ?u64 = null,
     timer: Timer = undefined,
 };
-const ScheduleWakeHandle = struct {
+pub const ScheduleWakeHandle = struct {
+    const This = @This();
     re: *ResetEvent,
     att: *AtomicScheduleTime,
+    pub fn init(alloc: Allocator) !This {
+        const vre = try alloc.create(ResetEvent);
+        const vatt = try alloc.create(AtomicScheduleTime.init(ScheduleTime{}));
+        return This{
+            .att = vatt,
+            .re = vre,
+        };
+    }
 };
 
 /// this is an improvement over just waking the thread through a busy polling thread
