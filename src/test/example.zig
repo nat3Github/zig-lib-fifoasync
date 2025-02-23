@@ -31,7 +31,8 @@ pub fn main() !void {
         my_struct_as.make_measurement(timer) catch unreachable;
         my_struct_as.wake() catch unreachable;
 
-        std.Thread.sleep(10 * MILLISECOND);
+        const wait = my_struct_as.wait_handle.?;
+        wait.timedWait(10 * MILLISECOND) catch {};
 
         // handle return
         while (my_struct_as.channel.receive()) |ret| {
@@ -53,11 +54,8 @@ pub fn main() !void {
     for (mesarr) |k| {
         std.debug.print("\n {d:.3} ms", .{ns_to_ms_f64(k)});
     }
-
     std.debug.print("\nmean: {d:.3}", .{calc_mean_ms(mesarr[0..])});
     std.debug.print("\nmax: {d:.3}", .{calc_max_ms(mesarr[0..])});
-    // wakeup_sv.deinit();
-    // server_as.deinit();
     try test_polling_server(gpa);
 }
 fn ns_to_ms_f64(k: u64) f64 {
