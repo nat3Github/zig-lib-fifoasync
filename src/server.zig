@@ -18,36 +18,9 @@ const AtomicBool = Atomic(bool);
 var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
 const test_gpa = heapalloc.allocator();
 
-const SleepNanoSeconds = u64;
-const util = struct {
-    fn switchb_type(b: bool, T_if_true: type, T_if_false: type) switch (b) {
-        true => T_if_true,
-        false => T_if_false,
-    } {
-        return switch (b) {
-            true => T_if_true,
-            false => T_if_false,
-        };
-    }
-    fn switchb_val(b: bool, if_true: anytype, if_false: anytype) switch (b) {
-        true => @TypeOf(if_true),
-        false => @TypeOf(if_false),
-    } {
-        return switch (b) {
-            true => if_true,
-            false => if_false,
-        };
-    }
-    fn type_from_option(option: bool, T: type) type {
-        return switch (option) {
-            false => VoidType,
-            true => T,
-        };
-    }
-};
 pub const VoidType = struct {};
 
-const WThreadConfig = struct {
+pub const WThreadConfig = struct {
     const This = @This();
     // want to use a type on the stack?
     T_stack_type: type = VoidType,
@@ -79,7 +52,7 @@ const WThreadConfig = struct {
         return this;
     }
 };
-const WThreadHandleConfig = struct {
+pub const WThreadHandleConfig = struct {
     channel: type,
     reset_event: type,
 };
@@ -184,7 +157,7 @@ test "simple call loop" {
     const TestingFn = struct {
         const Self = @This();
         counter: u32 = 0,
-        fn f(self: *Self) anyerror!SleepNanoSeconds {
+        fn f(self: *Self) anyerror!u64 {
             if (self.counter == 10) {
                 return error.FinishedTest;
             }
@@ -236,9 +209,8 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
         /// the instance then can be called through an Delegator instance
         pub fn init(alloc: Allocator, instance: T, serverfifo: DServerChannel) !ThreadT.InitReturnType {
             const re = try alloc.create([2]ResetEvent);
-            for (re) |*r| {
-                r.* = ResetEvent{};
-            }
+            for (re) |*r| r.* = ResetEvent{};
+
             return try ThreadT.init(alloc, instance, f, serverfifo, serverfifo, re, re);
         }
         fn f(inst: *T, th: *ThreadT.ArgumentType) !void {
@@ -639,15 +611,17 @@ test "test sleeping" {
 const ScheduleWakeConfig = struct {
     /// how many wake handles are processed
     slots: usize = 1024,
+    T_schedule_wake_handle: type = ScheduleWakeHandle,
 };
 const ResetEvent = std.Thread.ResetEvent;
 const Timer = std.time.Timer;
-pub const AtomicScheduleTime = Atomic(ScheduleTime);
+pub const AtomicScheduleTime = Atomic(?ScheduleTime);
 
 pub const ScheduleTime = struct {
-    time_nano: ?u64 = null,
-    timer: Timer = undefined,
+    time_nano: u64,
+    timer: Timer,
 };
+
 pub const ScheduleWakeHandle = struct {
     const This = @This();
     re: *ResetEvent,
@@ -659,6 +633,12 @@ pub const ScheduleWakeHandle = struct {
             .att = vatt,
             .re = vre,
         };
+    }
+    pub fn check(self: *const This) bool {
+        const x = self.att.load(.unordered);
+        if (x) |t| {
+            if (x.timer.read() >= t.time_nano) h.re.set();
+        }
     }
 };
 
@@ -677,12 +657,7 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
             local_timer: Timer = null,
             fn f(self: *T) !u64 {
                 if (self.local_timer == null) self.local_timer = Timer.start() catch unreachable;
-                for (self.handles) |h| {
-                    const x = h.att.load(.unordered);
-                    if (x.time_nano) |t| {
-                        if (x.timer.read() >= t) h.re.set();
-                    }
-                }
+                for (self.handles) |h| {}
                 const time_to_turn = self.local_timer.lap();
                 self.compensation = (time_to_turn + self.compensation) / 2;
                 return 0;
