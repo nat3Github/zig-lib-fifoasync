@@ -611,7 +611,6 @@ test "test sleeping" {
 const ScheduleWakeConfig = struct {
     /// how many wake handles are processed
     slots: usize = 1024,
-    T_schedule_wake_handle: type = ScheduleWakeHandle,
 };
 const ResetEvent = std.Thread.ResetEvent;
 const Timer = std.time.Timer;
@@ -634,12 +633,6 @@ pub const ScheduleWakeHandle = struct {
             .re = vre,
         };
     }
-    pub fn check(self: *const This) bool {
-        const x = self.att.load(.unordered);
-        if (x) |t| {
-            if (x.timer.read() >= t.time_nano) h.re.set();
-        }
-    }
 };
 
 /// this is an improvement over just waking the thread through a busy polling thread
@@ -657,7 +650,12 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
             local_timer: Timer = null,
             fn f(self: *T) !u64 {
                 if (self.local_timer == null) self.local_timer = Timer.start() catch unreachable;
-                for (self.handles) |h| {}
+                for (self.handles) |h| {
+                    const x = h.att.load(.unordered);
+                    if (x) |t| {
+                        if (x.timer.read() >= t.time_nano) h.re.set();
+                    }
+                }
                 const time_to_turn = self.local_timer.lap();
                 self.compensation = (time_to_turn + self.compensation) / 2;
                 return 0;
