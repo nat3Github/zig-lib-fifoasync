@@ -1,32 +1,34 @@
 const std = @import("std");
 const root = @import("../lib.zig");
 const wthread = root.threads.wthread;
-const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 
 const ResetEvent = std.Thread.ResetEvent;
 const Timer = std.time.Timer;
 
-pub const AtomicU32 = Atomic(u32);
+/// NOTE: need to use 64 because 32 is only equal to 5 seconds as NanoSeconds
+/// so value is a u64 and protected through atomic access if methods are called on it
+/// u64 value is refering to NanoSeconds
+/// u64 maximum integer is the null value,
 pub const SchedTime = struct {
-    const NullValue: u32 = std.math.maxInt(u32);
+    const NullValue: u64 = std.math.maxInt(u64);
     const This = @This();
-    __value: *AtomicU32,
+    _value: *u64,
     /// init self with null value
     pub fn init(gpa: Allocator) !This {
-        const v = try gpa.create(AtomicU32);
-        v.* = AtomicU32.init(NullValue);
-        return This{ .__value = v };
+        const v = try gpa.create(u64);
+        v.* = NullValue;
+        return This{ ._value = v };
     }
-    pub fn get_val(self: *const This) ?u32 {
-        const val = self.__value.load(.acquire);
+    pub fn get(self: *const This) ?u64 {
+        const val = @atomicLoad(u64, &self._value, .acquire);
         if (val == NullValue) return null else return val;
     }
-    pub fn set_val(self: *const This, val: ?u32) void {
+    pub fn set(self: *const This, val: ?u64) void {
         if (val) |v| {
             std.debug.assert(v != NullValue);
-            self.__value.store(v, .release);
-        } else self.__value.store(NullValue, .release);
+            @atomicStore(usize, self._value, v, .release);
+        } else @atomicStore(usize, self._value, NullValue, .release);
     }
 };
 
@@ -44,12 +46,12 @@ pub const SchedHandle = struct {
         };
     }
     pub fn check(self: *This, time_progress_nano: u32, compensation: u64) void {
-        const x = self.att.get_val() orelse return;
+        const x = self.att.get() orelse return;
         self.local_counter += time_progress_nano;
         if (self.local_counter + compensation >= x) {
             self.re.set();
             self.local_counter = 0;
-            self.att.set_val(null);
+            self.att.set(null);
         }
     }
 };
