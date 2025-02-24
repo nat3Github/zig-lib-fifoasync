@@ -2,7 +2,7 @@ const std = @import("std");
 const fs = std.fs;
 const mem = std.mem;
 const heap = std.heap;
-const server = @import("fifoasync");
+const server = @import("fifoasync").threads.delegator;
 const auto_generated_module = @import("delegator");
 const MyStruct = @import("examplestruct").MyStruct;
 
@@ -77,7 +77,7 @@ fn calc_max_ms(slc: []u64) f64 {
     }
     return ns_to_ms_f64(x);
 }
-const Fifo = @import("fifoasync").Fifo;
+const Fifo = @import("fifoasync").spsc.Fifo;
 const Timer = std.time.Timer;
 fn test_polling_server(aalc: std.mem.Allocator) !void {
     const FifoT = Fifo(Timer, 32);

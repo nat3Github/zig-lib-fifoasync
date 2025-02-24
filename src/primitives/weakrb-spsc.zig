@@ -4,11 +4,9 @@ const AtomicOrder = std.builtin.AtomicOrder;
 const AtomicUsize = AtomicV(usize);
 const Allocator = std.mem.Allocator;
 
-var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
-const test_gpa = heapalloc.allocator();
 /// Single Producer Single Consumer Lockfree Queue Algorithm according to:
 /// https://www.irif.fr/~guatto/papers/sbac13.pdf WeakRB Algorithm
-pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
+pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
     return struct {
         const Self = @This();
         back: AtomicUsize = AtomicUsize.init(0),
@@ -79,7 +77,10 @@ pub fn FifoWeakRB(comptime T: type, comptime capacity: comptime_int) type {
     };
 }
 test "spsc basic test" {
-    var fifo = try FifoWeakRB(u32, 4).init(test_gpa);
+    // var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
+    // const test_gpa = heapalloc.allocator();
+    const test_gpa = std.testing.allocator;
+    var fifo = try Fifo(u32, 4).init(test_gpa);
     for (0..10) |i| {
         const casted: u32 = @intCast(i);
         fifo.push(casted) catch unreachable;
@@ -87,23 +88,22 @@ test "spsc basic test" {
         try std.testing.expect((ret == casted));
     }
 }
-
-pub fn LinkedChannelWeakRB(
+pub fn LinkedChannel(
     comptime SendT: type,
     comptime ReturnT: type,
     comptime capacity: comptime_int,
 ) type {
     return struct {
         const Self = @This();
-        sender: *FifoWeakRB(SendT, capacity),
-        receiver: *FifoWeakRB(ReturnT, capacity),
+        sender: *Fifo(SendT, capacity),
+        receiver: *Fifo(ReturnT, capacity),
         pub fn send(self: *Self, msg: SendT) !void {
             try self.sender.push(msg);
         }
         pub fn receive(self: *Self) ?ReturnT {
             return self.receiver.pop();
         }
-        pub fn init(sender: *FifoWeakRB(SendT, capacity), receiver: *FifoWeakRB(ReturnT, capacity)) Self {
+        pub fn init(sender: *Fifo(SendT, capacity), receiver: *Fifo(ReturnT, capacity)) Self {
             return Self{
                 .sender = sender,
                 .receiver = receiver,
@@ -114,16 +114,17 @@ pub fn LinkedChannelWeakRB(
         }
     };
 }
-pub fn get_bidirectional_linked_channels_rb(gpa: Allocator, comptime A: type, comptime B: type, capacity: comptime_int) !std.meta.Tuple(&.{ LinkedChannelWeakRB(A, B, capacity), LinkedChannelWeakRB(B, A, capacity) }) {
-    const fifoA = try FifoWeakRB(A, capacity).init_on_heap(gpa);
-    const fifoB = try FifoWeakRB(B, capacity).init_on_heap(gpa);
-    const c1 = LinkedChannelWeakRB(A, B, capacity).init(fifoA, fifoB);
-    const c2 = LinkedChannelWeakRB(B, A, capacity).init(fifoB, fifoA);
+pub fn get_bidirectional_linked_channels(gpa: Allocator, comptime A: type, comptime B: type, capacity: comptime_int) !std.meta.Tuple(&.{ LinkedChannel(A, B, capacity), LinkedChannel(B, A, capacity) }) {
+    const fifoA = try Fifo(A, capacity).init_on_heap(gpa);
+    const fifoB = try Fifo(B, capacity).init_on_heap(gpa);
+    const c1 = LinkedChannel(A, B, capacity).init(fifoA, fifoB);
+    const c2 = LinkedChannel(B, A, capacity).init(fifoB, fifoA);
     return .{ c1, c2 };
 }
 
 test "2way channel basic test" {
-    const channels = try get_bidirectional_linked_channels_rb(test_gpa, u32, i32, 4);
+    const test_gpa = std.testing.allocator;
+    const channels = try get_bidirectional_linked_channels(test_gpa, u32, i32, 4);
     var base = channels[0];
     var server = channels[1];
     for (0..10) |i| {
@@ -134,5 +135,5 @@ test "2way channel basic test" {
     }
 }
 test "test all refs" {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDecls(@This());
 }

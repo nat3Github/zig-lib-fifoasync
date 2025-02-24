@@ -9,8 +9,10 @@ const std = @import("std");
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    // const std_module = b.addModule("std", .{ .root_source_file = b.path("src/tools/std.zig") });
-    // ziggen
+
+    const test_step = b.step("test", "Run unit tests");
+    const run_step = b.step("run", "Run the app");
+
     const ziggen = b.dependency("ziggen", .{
         .target = target,
         .optimize = std.builtin.OptimizeMode.ReleaseFast,
@@ -18,16 +20,16 @@ pub fn build(b: *std.Build) !void {
     const ziggen_module = ziggen.module("ziggen");
     // make library module
     const fifoasync_module = b.addModule("fifoasync", .{
-        .root_source_file = b.path("src/server.zig"),
+        .root_source_file = b.path("src/lib.zig"),
         .optimize = optimize,
         .target = target,
     });
     fifoasync_module.addImport("ziggen", ziggen_module);
 
-    const struct_mod = b.addModule("examplestruct", .{ .root_source_file = b.path("src/test/some_struct.zig") });
+    const struct_mod = b.addModule("examplestruct", .{ .root_source_file = b.path("test/some_struct.zig") });
     const src_generator = b.addExecutable(.{
         .name = "dev-src-gen",
-        .root_source_file = b.path("src/tools/src_generator.zig"),
+        .root_source_file = b.path("tools/src_generator.zig"),
         .target = target,
         .optimize = .Debug,
     });
@@ -41,7 +43,7 @@ pub fn build(b: *std.Build) !void {
 
     const example_exe = b.addExecutable(.{
         .name = "meta example",
-        .root_source_file = b.path("src/test/example.zig"),
+        .root_source_file = b.path("test/example.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -51,38 +53,18 @@ pub fn build(b: *std.Build) !void {
     example_exe.root_module.addImport("delegator", auto_generated_mod);
     b.installArtifact(example_exe);
 
-    // run step for example_exe
     const run_cmd = b.addRunArtifact(example_exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
-    const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // add test
-    const codegen_test = b.addTest(.{
-        .root_source_file = b.path("src/delegator.zig"),
+    const lib_test = b.addTest(.{
+        .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const codegen_test_run = b.addRunArtifact(codegen_test);
-    const server_test = b.addTest(.{
-        .root_source_file = b.path("src/server.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const server_test_run = b.addRunArtifact(server_test);
-    const spsc_test = b.addTest(.{
-        .root_source_file = b.path("src/weakrb-spsc.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const spsc_test_run = b.addRunArtifact(spsc_test);
-
-    // run tests
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&codegen_test_run.step);
-    test_step.dependOn(&server_test_run.step);
-    test_step.dependOn(&spsc_test_run.step);
+    const lib_test_run = b.addRunArtifact(lib_test);
+    test_step.dependOn(&lib_test_run.step);
 }
