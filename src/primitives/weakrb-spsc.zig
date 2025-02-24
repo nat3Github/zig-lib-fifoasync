@@ -1,7 +1,5 @@
 const std = @import("std");
-const AtomicV = std.atomic.Value;
 const AtomicOrder = std.builtin.AtomicOrder;
-const AtomicUsize = AtomicV(usize);
 const Allocator = std.mem.Allocator;
 
 /// Single Producer Single Consumer Lockfree Queue Algorithm according to:
@@ -9,9 +7,9 @@ const Allocator = std.mem.Allocator;
 pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
     return struct {
         const Self = @This();
-        back: AtomicUsize = AtomicUsize.init(0),
+        back: usize = 0,
         cback: usize = 0,
-        front: AtomicUsize = AtomicUsize.init(0),
+        front: usize = 0,
         pfront: usize = 0,
         data: []T,
         gpa: Allocator,
