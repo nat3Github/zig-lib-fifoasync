@@ -30,9 +30,11 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
         }
         pub fn push_slice(self: *Self, items: []const T) !void {
             const n = items.len;
-            const b = self.back.load(AtomicOrder.unordered);
+            const b = @atomicLoad(usize, &self.back, .unordered);
+            // const b = self.back.load(AtomicOrder.unordered);
             if ((self.pfront + capacity - b) < n) {
-                self.pfront = self.front.load(AtomicOrder.acquire);
+                self.pfront = @atomicLoad(usize, &self.front.load, .acquire);
+                // self.pfront = self.front.load(AtomicOrder.acquire);
                 if ((self.pfront + capacity - b) < n) {
                     return error.NotEnoughSpace;
                 }
@@ -40,13 +42,16 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
             for (0..n) |i| {
                 self.data[(b + i) % capacity] = items[i];
             }
-            self.back.store(b + n, AtomicOrder.release);
+            @atomicStore(usize, &self.back, b + n, .release);
+            // self.back.store(b + n, AtomicOrder.release);
         }
         pub fn pop_slice(self: *Self, items: []T) !void {
             const n = items.len;
-            const f = self.front.load(AtomicOrder.unordered);
+            const f = @atomicLoad(usize, &self.front, .unordered);
+            // const f = self.front.load(AtomicOrder.unordered);
             if ((self.cback - f) < n) {
-                self.cback = self.back.load(AtomicOrder.acquire);
+                @atomicLoad(usize, &self.back, .acquire);
+                // self.cback = self.back.load(AtomicOrder.acquire);
                 if ((self.cback - f) < n) {
                     return error.NotEnoughItems;
                 }
@@ -54,7 +59,8 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
             for (items, 0..) |*e, i| {
                 e.* = self.data[(f + i) % capacity];
             }
-            self.front.store(f + n, AtomicOrder.release);
+            @atomicStore(usize, &self.front, f + n, .release);
+            // self.front.store(f + n, AtomicOrder.release);
         }
         pub fn push(self: *Self, item: T) !void {
             const xitem: [1]T = .{item};
