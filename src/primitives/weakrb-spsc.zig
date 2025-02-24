@@ -15,15 +15,8 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
         pfront: usize = 0,
         data: []T,
         gpa: Allocator,
-        // this somehow doesnt work in threaded context so its privat for now
-        fn init(alloc: Allocator) !Self {
-            const data = try alloc.alloc(T, capacity);
-            return .{
-                .gpa = alloc,
-                .data = data,
-            };
-        }
-        pub fn init_on_heap(alloc: Allocator) !*Self {
+        /// allocates its data and itself on the heap (cant be stack local)
+        pub fn init(alloc: Allocator) !*Self {
             const data = try alloc.alloc(T, capacity);
             const this = try alloc.create(Self);
             this.* = .{
@@ -32,8 +25,10 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
             };
             return this;
         }
+        /// cleans up all data allocated by This including the pointer to itself (dont use the pointer after this)
         pub fn deinit(self: *Self) void {
             self.gpa.free(self.data);
+            self.gpa.destroy(self);
         }
         pub fn push_slice(self: *Self, items: []const T) !void {
             const n = items.len;
@@ -77,10 +72,9 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
     };
 }
 test "spsc basic test" {
-    // var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
-    // const test_gpa = heapalloc.allocator();
     const test_gpa = std.testing.allocator;
     var fifo = try Fifo(u32, 4).init(test_gpa);
+    defer fifo.deinit();
     for (0..10) |i| {
         const casted: u32 = @intCast(i);
         fifo.push(casted) catch unreachable;
@@ -114,19 +108,29 @@ pub fn LinkedChannel(
         }
     };
 }
-pub fn get_bidirectional_linked_channels(gpa: Allocator, comptime A: type, comptime B: type, capacity: comptime_int) !std.meta.Tuple(&.{ LinkedChannel(A, B, capacity), LinkedChannel(B, A, capacity) }) {
-    const fifoA = try Fifo(A, capacity).init_on_heap(gpa);
-    const fifoB = try Fifo(B, capacity).init_on_heap(gpa);
-    const c1 = LinkedChannel(A, B, capacity).init(fifoA, fifoB);
-    const c2 = LinkedChannel(B, A, capacity).init(fifoB, fifoA);
-    return .{ c1, c2 };
+
+pub fn BiLinkedChannels(A: type, B: type, capacity: comptime_int) type {
+    return struct {
+        A_to_B_channel: LinkedChannel(A, B, capacity),
+        B_to_A_channel: LinkedChannel(B, A, capacity),
+    };
+}
+pub fn get_bidirectional_linked_channels(gpa: Allocator, comptime A: type, comptime B: type, capacity: comptime_int) !BiLinkedChannels(A, B, capacity) {
+    const fifoA = try Fifo(A, capacity).init(gpa);
+    const fifoB = try Fifo(B, capacity).init(gpa);
+    return BiLinkedChannels(A, B, capacity){
+        .A_to_B_channel = LinkedChannel(A, B, capacity).init(fifoA, fifoB),
+        .B_to_A_channel = LinkedChannel(B, A, capacity).init(fifoB, fifoA),
+    };
 }
 
 test "2way channel basic test" {
     const test_gpa = std.testing.allocator;
     const channels = try get_bidirectional_linked_channels(test_gpa, u32, i32, 4);
-    var base = channels[0];
-    var server = channels[1];
+    var base = channels.A_to_B_channel;
+    var server = channels.B_to_A_channel;
+    defer base.deinit();
+    defer server.deinit();
     for (0..10) |i| {
         const casted: u32 = @intCast(i);
         try base.send(casted);
@@ -134,6 +138,7 @@ test "2way channel basic test" {
         try std.testing.expect((ret == casted));
     }
 }
+
 test "test all refs" {
     std.testing.refAllDecls(@This());
 }

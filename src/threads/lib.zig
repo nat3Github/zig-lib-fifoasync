@@ -1,5 +1,5 @@
 pub const delegator = @import("delegator.zig");
-pub const wthread = @import("w_thread.zig");
+pub const wthread = @import("wthread.zig");
 pub const rtschedule = @import("rtschedule.zig");
 
 const std = @import("std");

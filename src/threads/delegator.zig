@@ -120,7 +120,7 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
         // poll interval specifies how long the thread sleeps after it checked all wakeup slots
         pub fn init(alloc: Allocator) !Self {
             const server_slots = try alloc.alloc(Self.ABoolResetEvent, capacity);
-            const fifo = try spsc.Fifo(ABoolResetEvent, capacity).init_on_heap(alloc);
+            const fifo = try spsc.Fifo(ABoolResetEvent, capacity).init(alloc);
             const wakestruct = WakeStruct{
                 .fifo_ptr = fifo,
                 .slots = server_slots,
@@ -209,8 +209,8 @@ pub fn RtsDelegatorServer(config: DelegatorServerConfig) type {
         pub fn register_delegator(self: *This, inst: T) !T_Delegator {
             if (self._dcount == INSTANCE_CAP) return error.DelegatorServerLimitIsFull;
             const bichannel = try spsc.get_bidirectional_linked_channels(self._alloc, Args, Ret, CHANNEL_CAP);
-            const basefifo = bichannel[0];
-            const serverfifo = bichannel[1];
+            const basefifo = bichannel.A_to_B_channel;
+            const serverfifo = bichannel.B_to_A_channel;
             const dthread = try T_DThread.init(self._alloc, inst, serverfifo);
             self.delegator_threads[self._dcount] = dthread;
             self._dcount += 1;
@@ -278,5 +278,6 @@ pub fn BlockingDelegatorServer(config: DelegatorServerConfig) type {
 }
 
 test "test all refs" {
-    std.testing.refAllDecls(@This());
+    std.debug.print("\ndelegatar.zig semantic test", .{});
+    std.testing.refAllDeclsRecursive(@This());
 }

@@ -107,7 +107,7 @@ fn test_polling_server(aalc: std.mem.Allocator) !void {
             std.debug.print(fmt, .{ mean, max });
         }
     };
-    const fifo = try FifoT.init_on_heap(aalc);
+    const fifo = try FifoT.init(aalc);
     const h = try std.Thread.spawn(.{ .allocator = aalc }, S.f, .{
         fifo,
     });
