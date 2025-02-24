@@ -13,6 +13,7 @@ const Timer = std.time.Timer;
 pub const SchedTime = struct {
     const NullValue: u64 = std.math.maxInt(u64);
     const This = @This();
+    /// not threadsafe to use use get and set
     _value: *u64,
     /// init self with null value
     pub fn init(gpa: Allocator) !This {
