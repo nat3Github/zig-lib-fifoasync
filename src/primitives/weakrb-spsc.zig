@@ -42,7 +42,7 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
             for (0..n) |i| {
                 self.data[(b + i) % capacity] = items[i];
             }
-            self.back = @atomicStore(usize, &self.back, b + n, .release);
+            @atomicStore(usize, &self.back, b + n, .release);
             // self.back.store(b + n, AtomicOrder.release);
         }
         pub fn pop_slice(self: *Self, items: []T) !void {
@@ -59,7 +59,7 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
             for (items, 0..) |*e, i| {
                 e.* = self.data[(f + i) % capacity];
             }
-            self.front = @atomicStore(usize, &self.front, f + n, .release);
+            @atomicStore(usize, &self.front, f + n, .release);
             // self.front.store(f + n, AtomicOrder.release);
         }
         pub fn push(self: *Self, item: T) !void {

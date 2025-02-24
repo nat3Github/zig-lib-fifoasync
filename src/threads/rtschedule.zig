@@ -22,7 +22,7 @@ pub const SchedTime = struct {
         return This{ ._value = v };
     }
     pub fn get(self: *const This) ?u64 {
-        const val = @atomicLoad(u64, &self._value, .acquire);
+        const val = @atomicLoad(u64, self._value, .acquire);
         if (val == NullValue) return null else return val;
     }
     pub fn set(self: *const This, val: ?u64) void {
