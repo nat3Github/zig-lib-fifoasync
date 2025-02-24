@@ -33,7 +33,7 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
             const b = @atomicLoad(usize, &self.back, .unordered);
             // const b = self.back.load(AtomicOrder.unordered);
             if ((self.pfront + capacity - b) < n) {
-                self.pfront = @atomicLoad(usize, &self.front.load, .acquire);
+                self.pfront = @atomicLoad(usize, &self.front, .acquire);
                 // self.pfront = self.front.load(AtomicOrder.acquire);
                 if ((self.pfront + capacity - b) < n) {
                     return error.NotEnoughSpace;
