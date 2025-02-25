@@ -67,6 +67,7 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
                     try chan.send(ret);
                     reset_notify.set();
                 }
+                reset_loc.reset();
                 reset_loc.timedWait(std.math.maxInt(u64)) catch unreachable;
             }
             // sleep maximum amount

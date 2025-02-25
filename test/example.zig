@@ -32,7 +32,7 @@ pub fn main() !void {
         my_struct_as.wake() catch unreachable;
 
         const wait = my_struct_as.wait_handle.?;
-        wait.timedWait(10 * MILLISECOND) catch {};
+        try wait.timedWait(100 * MILLISECOND);
 
         // handle return
         while (my_struct_as.channel.receive()) |ret| {
@@ -50,6 +50,7 @@ pub fn main() !void {
                 else => unreachable,
             }
         }
+        std.Thread.sleep(1 * 1000 * 1000);
     }
     for (mesarr) |k| {
         std.debug.print("\n {d:.3} ms", .{ns_to_ms_f64(k)});

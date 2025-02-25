@@ -3,8 +3,10 @@ const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 const AtomicOrder = std.builtin.AtomicOrder;
 const AtomicBool = Atomic(bool);
+const ResetEvent = std.Thread.ResetEvent;
 
 pub const VoidType = struct {};
+pub const Void = VoidType{};
 
 pub const WThreadConfig = struct {
     const This = @This();
@@ -42,17 +44,39 @@ pub const WThreadHandleConfig = struct {
     channel: type,
     reset_event: type,
 };
+pub fn WThreadArg(cfg: WThreadHandleConfig) type {
+    return struct {
+        const This = @This();
+        pub const config = cfg;
+        is_running: *AtomicBool,
+        reset_event: cfg.reset_event,
+        channel: cfg.channel,
+    };
+}
 
 pub fn WThreadHandle(cfg: WThreadHandleConfig) type {
     return struct {
         const This = @This();
         pub const config = cfg;
         is_running: *AtomicBool,
+        stop_event: *ResetEvent,
         reset_event: cfg.reset_event,
         // channel for communication
         channel: cfg.channel,
         // this allocator is exposed to the thread make sure it is threadsafe if you use it
         alloc: Allocator,
+        pub fn stop(self: *This) void {
+            self.is_running.store(false, .release);
+        }
+        pub fn wait_till_stopped(self: *This, time_out_ns: u64) !void {
+            self.stop();
+            try self.stop_event.timedWait(time_out_ns);
+        }
+        /// if deinit is called before the thread is stopped segfaults will likely crash the programm
+        pub fn deinit(self: *This) void {
+            self.alloc.destroy(self.is_running);
+            self.alloc.destroy(self.stop_event);
+        }
     };
 }
 pub fn WThread(cfg: WThreadConfig) type {
@@ -65,7 +89,7 @@ pub fn WThread(cfg: WThreadConfig) type {
         .channel = cfg.T_channel_type_thread,
         .reset_event = cfg.reset_event_thread,
     };
-    const T_Thread = WThreadHandle(config_thread);
+    const T_Thread = WThreadArg(config_thread);
     const T_reset_event_thread = cfg.reset_event_thread;
     const T_reset_event_local = cfg.reset_event_local;
     const T_channel_local = cfg.T_channel_type_local;
@@ -78,13 +102,14 @@ pub fn WThread(cfg: WThreadConfig) type {
         pub const InitReturnType = T_This;
         pub const ArgumentType = T_Thread;
 
-        fn exe(inst: T_stack, thread: T_Thread, fx: fn (*T_stack, *T_Thread) anyerror!void) void {
+        fn exe(inst: T_stack, thread: T_Thread, fx: fn (*T_stack, *T_Thread) anyerror!void, stop_event: *ResetEvent) void {
             var xthread = thread;
             xthread.is_running.store(true, AtomicOrder.release);
             var t: T_stack = inst;
             std.log.debug("w thread started", .{});
             fx(&t, &xthread) catch |e| std.log.err("error in thread accured: {}", .{e});
             std.log.warn("l thread has terminated\n", .{});
+            stop_event.set();
         }
         pub fn init(
             alloc: Allocator,
@@ -97,8 +122,10 @@ pub fn WThread(cfg: WThreadConfig) type {
         ) !T_This {
             const running: *AtomicBool = try alloc.create(AtomicBool);
             running.* = AtomicBool.init(false);
+            const stop_event = try alloc.create(ResetEvent);
+            stop_event.* = ResetEvent{};
+            stop_event.reset();
             const thread = T_Thread{
-                .alloc = alloc,
                 .is_running = running,
                 .channel = channel_thread,
                 .reset_event = reset_event_thread,
@@ -107,6 +134,7 @@ pub fn WThread(cfg: WThreadConfig) type {
                 instance,
                 thread,
                 f,
+                stop_event,
             });
             th.detach();
             const local = T_This{
@@ -114,10 +142,34 @@ pub fn WThread(cfg: WThreadConfig) type {
                 .is_running = running,
                 .channel = channel_local,
                 .reset_event = reset_event_local,
+                .stop_event = stop_event,
             };
             return local;
         }
     };
+}
+test "test wthread" {
+    const alloc = std.testing.allocator;
+    const cfg = WThreadConfig{};
+    const T = WThread(cfg);
+    const S = struct {
+        fn f(s: *VoidType, thread: *T.ArgumentType) !void {
+            while (thread.is_running.load(.acquire)) {}
+            _ = s;
+        }
+    };
+    var sv = try T.init(
+        alloc,
+        Void,
+        S.f,
+        Void,
+        Void,
+        Void,
+        Void,
+    );
+    while (!sv.is_running.load(.acquire)) {}
+    try sv.wait_till_stopped(1000 * 1000 * 1000);
+    sv.deinit();
 }
 test "test all refs" {
     std.testing.refAllDecls(@This());
