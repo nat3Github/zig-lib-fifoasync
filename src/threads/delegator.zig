@@ -43,32 +43,37 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
     return struct {
         const This = @This();
         pub const InitReturnType = ThreadT.InitReturnType;
-        const ThreadTConfig = wthread.WThreadConfig.init().withT(T).withChannelLinked(DServerChannel).withResetEventLinked(*[2]ResetEvent);
+        const ThreadTConfig = wthread.WThreadConfig.init(T_wrapper);
         const ThreadT = wthread.WThread(ThreadTConfig);
+        thread: ThreadT.InitReturnType,
+        const T_wrapper = struct {
+            channel: DServerChannel,
+            instance: T,
+        };
         /// launches a background thread with the instances T
         /// the instance then can be called through an Delegator instance
-        pub fn init(alloc: Allocator, instance: T, serverfifo: DServerChannel) !ThreadT.InitReturnType {
-            const re = try alloc.create([2]ResetEvent);
-            for (re) |*r| r.* = ResetEvent{};
-
-            return try ThreadT.init(alloc, instance, f, serverfifo, serverfifo, re, re);
+        pub fn init(alloc: Allocator, instance: T, serverfifo: DServerChannel) !This {
+            const inst = T_wrapper{
+                .instance = instance,
+                .channel = serverfifo,
+            };
+            const t = try ThreadT.init(alloc, inst, f);
+            return This{
+                .thread = t,
+            };
         }
-        fn f(inst: *T, th: *ThreadT.ArgumentType) !void {
+        fn f(inst: T_wrapper, th: ThreadT.ArgumentType) !void {
             // std.log.debug("\nwoke up will proces now", .{});
-            var chan = th.channel;
-            const run = th.is_running;
-            const reset: *[2]ResetEvent = th.reset_event;
-            var reset_loc = reset[0];
-            var reset_notify = reset[1];
-
-            while (run.load(AtomicOrder.acquire)) {
+            var chan = inst.channel;
+            var instance = inst.instance;
+            while (th.is_running.load(AtomicOrder.acquire)) {
                 while (chan.receive()) |msg| {
-                    const ret = D.__message_handler(inst, msg);
+                    const ret = D.__message_handler(&instance, msg);
                     try chan.send(ret);
-                    reset_notify.set();
                 }
-                reset_loc.reset();
-                reset_loc.timedWait(std.math.maxInt(u64)) catch unreachable;
+                th.thread_sets_handle_waits.set();
+                th.handle_sets_thread_waits.reset();
+                th.handle_sets_thread_waits.timedWait(std.math.maxInt(u64)) catch unreachable;
             }
             // sleep maximum amount
         }
@@ -145,6 +150,14 @@ pub fn RtsWakeUp(comptime capacity: usize) type {
         }
     };
 }
+pub const BlockingWakeUpHandle = struct {
+    const This = @This();
+    inner_handle: *std.Thread.ResetEvent,
+    pub fn wake(self: *const This) void {
+        self.inner_handle.set();
+    }
+};
+
 pub const DelegatorServerConfig = struct {
     const This = @This();
     max_num_delegators: usize = 16,
@@ -152,6 +165,7 @@ pub const DelegatorServerConfig = struct {
     D: fn (type, type, type) type,
     Args: type,
     Ret: type,
+    realtime_safe: bool = true,
     pub fn init(import: anytype) This {
         return This{
             .Args = @field(import, delegator_mod.RESERVED_ARGS),
@@ -180,27 +194,37 @@ pub const DelegatorServerConfig = struct {
 ///
 /// note: does not free allocated memory
 /// has a constant bound of needed memory (wont allocate indefinitely)
-pub fn RtsDelegatorServer(config: DelegatorServerConfig) type {
+pub fn DelegatorServer(config: DelegatorServerConfig) type {
     const Args = config.Args;
     const Ret = config.Ret;
     const CHANNEL_CAP = config.internal_channel_buffersize;
     const INSTANCE_CAP = config.max_num_delegators;
     const T_DChannel = DelegatorChannel(Args, Ret, CHANNEL_CAP);
     const T_DServerChannel = DelegatorChannel(Ret, Args, CHANNEL_CAP);
-    const T_WakeupHandle = RtsWakeUpHandle;
+    const T_WakeupHandle =
+        switch (config.realtime_safe) {
+        true => RtsWakeUpHandle,
+        false => BlockingWakeUpHandle,
+    };
     const T_Delegator = config.D(T_DChannel, T_WakeupHandle, *std.Thread.ResetEvent);
     const T = T_Delegator.Type;
-    const T_Wthread = RtsWakeUp(INSTANCE_CAP);
+    const T_Wthread = switch (config.realtime_safe) {
+        true => RtsWakeUp(INSTANCE_CAP),
+        false => wthread.VoidType,
+    };
     const T_DThread = DelegatorThread(T_Delegator, T, T_DServerChannel);
-    const T_DThreadHandle = T_DThread.InitReturnType;
+
     return struct {
         const This = @This();
         _dcount: usize = 0,
         _alloc: Allocator,
         wakeup_thread: T_Wthread,
-        delegator_threads: [INSTANCE_CAP]T_DThreadHandle = undefined,
+        delegator_threads: [INSTANCE_CAP]T_DThread = undefined,
         pub fn init(alloc: Allocator) !This {
-            const wkt = try T_Wthread.init(alloc);
+            const wkt = switch (config.realtime_safe) {
+                true => try T_Wthread.init(alloc),
+                else => wthread.Void,
+            };
             return This{
                 .wakeup_thread = wkt,
                 ._alloc = alloc,
@@ -215,65 +239,15 @@ pub fn RtsDelegatorServer(config: DelegatorServerConfig) type {
             const dthread = try T_DThread.init(self._alloc, inst, serverfifo);
             self.delegator_threads[self._dcount] = dthread;
             self._dcount += 1;
-            const reset: *[2]ResetEvent = dthread.reset_event;
-            const wh = try self.wakeup_thread.register(self._alloc, &reset[0]);
-            const del = T_Delegator{
+            const wh = switch (config.realtime_safe) {
+                true => try self.wakeup_thread.register(self._alloc, dthread.thread.handle_sets_thread_waits),
+                else => BlockingWakeUpHandle{ .inner_handle = dthread.thread.handle_sets_thread_waits },
+            };
+            return T_Delegator{
                 .channel = basefifo,
                 .wakeup_handle = wh,
-                .wait_handle = &reset[1],
+                .wait_handle = dthread.thread.thread_sets_handle_waits,
             };
-            return del;
-        }
-    };
-}
-/// Handle that is used by the WakeThread
-pub const BlockingWakeUpHandle = struct {
-    const This = @This();
-    inner_handle: *std.Thread.ResetEvent,
-    pub fn wake(self: *const This) void {
-        self.inner_handle.set();
-    }
-    pub fn deinit(self: *const This, gpa: Allocator) void {
-        gpa.destroy(self.inner_handle);
-    }
-};
-pub fn BlockingDelegatorServer(config: DelegatorServerConfig) type {
-    const Args = config.Args;
-    const Ret = config.Ret;
-    const CHANNEL_CAP = config.internal_channel_buffersize;
-    const INSTANCE_CAP = config.max_num_delegators;
-    const T_DChannel = DelegatorChannel(Args, Ret, CHANNEL_CAP);
-    const T_DServerChannel = DelegatorChannel(Ret, Args, CHANNEL_CAP);
-    const T_WakeupHandle = BlockingWakeUpHandle;
-    const T_Delegator = config.D(T_DChannel, T_WakeupHandle);
-    const T = T_Delegator.Type;
-    const T_DThread = DelegatorThread(T_Delegator, T, T_DServerChannel);
-    return struct {
-        const This = @This();
-        _dcount: usize = 0,
-        _alloc: Allocator,
-        delegator_threads: [INSTANCE_CAP]T_DThread = undefined,
-        pub fn init(alloc: Allocator) !This {
-            return This{
-                ._alloc = alloc,
-            };
-        }
-        // will consume an instance of T and return an Delegator (the autogenerated Delegator)
-        pub fn register_delegator(self: *This, inst: T) !T_Delegator {
-            if (self._dcount == INSTANCE_CAP) return error.DelegatorServerLimitIsFull;
-            const bichannel = try spsc.get_bidirectional_channels(self._alloc, Args, Ret, CHANNEL_CAP);
-            const basefifo = bichannel[0];
-            const serverfifo = bichannel[1];
-            const dthread = try T_DThread.init(self._alloc, inst, serverfifo);
-            const re = dthread.lthread.local_reset_event;
-            self.delegator_threads[self._dcount] = dthread;
-            self._dcount += 1;
-            const wh = BlockingWakeUpHandle{ .inner_handle = re };
-            const del = T_Delegator{
-                .channel = basefifo,
-                .wakeup_handle = wh,
-            };
-            return del;
         }
     };
 }

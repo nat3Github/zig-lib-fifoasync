@@ -13,6 +13,8 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("test", "Run unit tests");
     const run_step = b.step("run", "Run the app");
 
+    const opts = .{ .target = target, .optimize = optimize };
+    const zbench_module = b.dependency("zbench", opts).module("zbench");
     const ziggen = b.dependency("ziggen", .{
         .target = target,
         .optimize = std.builtin.OptimizeMode.ReleaseFast,
@@ -65,6 +67,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    lib_test.root_module.addImport("zbench", zbench_module);
     const lib_test_run = b.addRunArtifact(lib_test);
     test_step.dependOn(&lib_test_run.step);
 }

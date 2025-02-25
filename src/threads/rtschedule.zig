@@ -86,18 +86,20 @@ const ScheduleWakeConfig = struct {
 pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
     return struct {
         const This = @This();
-        const T_Lthread = wthread.WThread(wthread.WThreadConfig.init().withT([cfg.slots]SchedHandleLocal));
+        const T_Lthread = wthread.WThread(wthread.WThreadConfig.init([cfg.slots]SchedHandleLocal));
+
         thread: T_Lthread.InitReturnType,
         sched_handles: []SchedHandle,
-        fn f(self: *[cfg.slots]SchedHandleLocal, thread: *T_Lthread.ArgumentType) !void {
-            const handles = self[0..];
+        fn f(self: [cfg.slots]SchedHandleLocal, thread: T_Lthread.ArgumentType) !void {
+            var handles = self;
+            handles[0].check(0, 0);
             var compensation: u64 = 0;
             const offset = 1000 * 300 * 0;
             var local_timer: Timer = try Timer.start();
             local_timer.reset();
             while (thread.is_running.load(.acquire)) {
                 var time_to_turn = local_timer.read();
-                for (handles) |*h| {
+                for (handles[0..]) |*h| {
                     time_to_turn += local_timer.read();
                     h.check(time_to_turn, compensation);
                 }
@@ -118,10 +120,6 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
                 alloc,
                 hndles,
                 This.f,
-                wthread.Void,
-                wthread.Void,
-                wthread.Void,
-                wthread.Void,
             );
             return This{
                 .thread = t,
@@ -135,11 +133,10 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
             try self.thread.wait_till_stopped(time_out_ns);
         }
         /// if deinit is called before the thread is stopped segfaults will likely crash the programm
-        pub fn deinit(self: *This) void {
-            const alloc = self.thread.alloc;
+        pub fn deinit(self: *This, alloc: Allocator) void {
             for (self.sched_handles) |*h| h.deinit(alloc);
             alloc.free(self.sched_handles);
-            self.thread.deinit();
+            self.thread.deinit(alloc);
         }
     };
 }
@@ -172,58 +169,48 @@ test "test schedule wake" {
     }
     std.Thread.sleep(1 * ms);
     try sw.thread.wait_till_stopped(std.math.maxInt(u64));
-    statistics(mes_arr[0..]);
-    sw.deinit();
+    stats.basic_stats(mes_arr[0..]);
+    sw.deinit(alloc);
+}
+const stats = root.stats;
+
+test "how fast is Timer.read()?" {
+    const N_measurement = 1024;
+    var mes_arr: [N_measurement]u64 = undefined;
+
+    var timer = try Timer.start();
+    var timer2 = try Timer.start();
+    for (0..N_measurement) |i| {
+        timer.reset();
+        const real_time = timer.read();
+        mes_arr[i] = real_time;
+    }
+    const time = timer2.read();
+    const timef = stats.ns_to_ms_f64(time);
+    const fmt =
+        \\ how fast is timer.read()?
+        \\ in time {d:.3} ms
+        \\ that means avg = {d:.3} micro s
+        \\
+    ;
+    std.debug.print(fmt, .{ timef, 1000 * (timef / mes_arr.len) });
+}
+
+fn benchmark_time_read(alloc: Allocator) void {
+    _ = alloc;
+    var timer = Timer.start() catch unreachable;
+    _ = timer.read();
+}
+
+const zbench = @import("zbench");
+
+test "how fast is Timer.read()? 2" {
+    // var bench = zbench.Benchmark.init(std.testing.allocator, .{});
+    // defer bench.deinit();
+    // try bench.add("how fast is timer.read()", benchmark_time_read, .{});
+    // try bench.run(std.io.getStdOut().writer());
 }
 
 test "test all refs" {
     std.testing.refAllDeclsRecursive(@This());
-}
-
-fn statistics(slc: []u64) void {
-    const mean = calc_mean_ms(slc);
-    const max = calc_max_ms(slc);
-    const p90 = calc_mean_maxp(slc, 0.9);
-    const fmt =
-        \\ statistics ({} samples)
-        \\ mean: {d:.3} ms
-        \\ max: {d:.3} ms
-        \\ p90: {d:.3} ms
-        \\
-    ;
-    std.debug.print(fmt, .{ slc.len, mean, max, p90 });
-}
-fn calc_mean_maxp(slc: []u64, percentile: f32) f64 {
-    std.debug.assert(percentile <= 1.0 and percentile >= 0);
-    const z = @as(f64, @floatFromInt(slc.len)) * percentile;
-    const ind: usize = @intFromFloat(@floor(z));
-    const kk = struct {
-        const This = @This();
-        fn flessthan(v: This, a: u64, b: u64) bool {
-            _ = v;
-            return a < b;
-        }
-    };
-    std.mem.sort(u64, slc, kk{}, kk.flessthan);
-    return calc_mean_ms(slc[ind..]);
-}
-
-fn ns_to_ms_f64(k: u64) f64 {
-    const ns_f: f64 = @floatFromInt(k);
-    const ms: f64 = @floatFromInt(1_000_000);
-    return ns_f / ms;
-}
-fn calc_mean_ms(slc: []u64) f64 {
-    var x: f64 = 0;
-    for (slc) |s| {
-        x += ns_to_ms_f64(s) / @as(f64, @floatFromInt(slc.len));
-    }
-    return x;
-}
-fn calc_max_ms(slc: []u64) f64 {
-    var x: u64 = 0;
-    for (slc) |s| {
-        if (s >= x) x = s;
-    }
-    return ns_to_ms_f64(x);
 }
