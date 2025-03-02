@@ -30,7 +30,16 @@ pub const WThreadHandle = struct {
     thread_sets_handle_waits: *ResetEvent,
     handle_sets_thread_waits: *ResetEvent,
     // this allocator is exposed to the thread make sure it is threadsafe if you use it
+    pub fn isRunning(self: *const This) bool {
+        return self.is_running.load(.acquire);
+    }
+    pub fn spinwait_for_startup(self: *const This) void {
+        while (!self.is_running) {}
+    }
     pub fn stop(self: *This) void {
+        // NOTE: cant stop the thread if the thread was never fully started
+        // call spinwait_for_startup to make sure the thread is online before terminating it
+        std.debug.assert(self.isRunning());
         self.is_running.store(false, .release);
         self.handle_sets_thread_waits.set();
     }
@@ -109,6 +118,7 @@ test "test wthread" {
         fn f(s: VoidType, thread: T.ArgumentType) !void {
             while (thread.is_running.load(.acquire)) {}
             _ = s;
+            std.debug.print("\n thread Exited (good)", .{});
         }
     };
     var sv = try T.init(

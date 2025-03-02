@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 /// for safe use of from two threads (T is either available at the local thread or at the second thread)
+/// NOTE: when using a T which allocates you have to manually free that, this does not call deinit on T
 pub fn OneAccessToT(T: type) type {
     return struct {
         const This = @This();
@@ -19,10 +20,8 @@ pub fn OneAccessToT(T: type) type {
         }
         pub fn deinit(self: *This, alloc: Allocator) void {
             if (self.local_get()) |d| {
-                d.deinit(alloc);
                 alloc.destroy(d);
             } else {
-                self.thread_get().?.deinit(alloc);
                 alloc.destroy(self.thread_get().?);
             }
             alloc.destroy(self);
