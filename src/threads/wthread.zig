@@ -2,11 +2,36 @@ const std = @import("std");
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 const AtomicOrder = std.builtin.AtomicOrder;
-const AtomicBool = Atomic(bool);
+const AtomicU8 = Atomic(u8);
 const ResetEvent = std.Thread.ResetEvent;
 
 pub const VoidType = struct {};
 pub const Void = VoidType{};
+pub const StopSignal = struct {
+    const This = @This();
+    inner: *AtomicU8,
+    const THREAD_NOT_STARTED = 0;
+    const THREAD_STARTED = 1;
+    const THREAD_STOPP_SIGNAL = 2;
+    const THREAD_STOPPED = 3;
+    pub fn thread_is_running(self: *const This) bool {
+        return self.inner.load(.acquire) != THREAD_STOPP_SIGNAL;
+    }
+    pub fn thread_has_terminated(self: *const This) bool {
+        return self.inner.load(.acquire) == THREAD_STOPPED;
+    }
+    pub fn set_stopp_signal(self: *const This) void {
+        self.inner.store(THREAD_STOPP_SIGNAL, .release);
+    }
+    pub fn init(alloc: Allocator) !This {
+        const running: *AtomicU8 = try alloc.create(AtomicU8);
+        running.* = AtomicU8.init(THREAD_NOT_STARTED);
+        return This{ .inner = running };
+    }
+    pub fn deinit(self: *const This, alloc: Allocator) void {
+        alloc.destroy(self.inner);
+    }
+};
 
 pub const WThreadConfig = struct {
     const This = @This();
@@ -18,29 +43,31 @@ pub const WThreadConfig = struct {
 
 pub const WThreadArg = struct {
     const This = @This();
-    is_running: *AtomicBool,
+    stop_signal: StopSignal,
     thread_sets_handle_waits: *ResetEvent,
     handle_sets_thread_waits: *ResetEvent,
+    pub fn is_running(self: *const This) bool {
+        return self.stop_signal.thread_is_running();
+    }
 };
 
 pub const WThreadHandle = struct {
     const This = @This();
-    is_running: *AtomicBool,
+    stop_signal: StopSignal,
     stop_event: *ResetEvent,
     thread_sets_handle_waits: *ResetEvent,
     handle_sets_thread_waits: *ResetEvent,
     // this allocator is exposed to the thread make sure it is threadsafe if you use it
     pub fn isRunning(self: *const This) bool {
-        return self.is_running.load(.acquire);
+        return self.stop_signal.thread_is_running();
     }
+    /// dont call if stopped will dead block
     pub fn spinwait_for_startup(self: *const This) void {
-        while (!self.is_running) {}
+        if (self.stop_signal.thread_has_terminated()) return;
+        while (!self.isRunning()) {}
     }
     pub fn stop(self: *This) void {
-        // NOTE: cant stop the thread if the thread was never fully started
-        // call spinwait_for_startup to make sure the thread is online before terminating it
-        std.debug.assert(self.isRunning());
-        self.is_running.store(false, .release);
+        self.stop_signal.set_stopp_signal();
         self.handle_sets_thread_waits.set();
     }
     pub fn wait_till_stopped(self: *This, time_out_ns: u64) !void {
@@ -49,7 +76,7 @@ pub const WThreadHandle = struct {
     }
     /// if deinit is called before the thread is stopped segfaults will likely crash the programm
     pub fn deinit(self: *This, alloc: Allocator) void {
-        alloc.destroy(self.is_running);
+        self.stop_signal.deinit(alloc);
         alloc.destroy(self.stop_event);
         alloc.destroy(self.thread_sets_handle_waits);
         alloc.destroy(self.handle_sets_thread_waits);
@@ -68,9 +95,12 @@ pub fn WThread(cfg: WThreadConfig) type {
 
         fn exe(inst: T_stack, thread: T_Thread, fx: fn (T_stack, T_Thread) anyerror!void, stop_event: *ResetEvent) void {
             var xthread = thread;
-            xthread.is_running.store(true, AtomicOrder.release);
-            fx(inst, xthread) catch |e| std.log.err("error in thread accured: {}", .{e});
-            std.log.warn("l thread has terminated\n", .{});
+            const stopped = xthread.stop_signal.inner.swap(StopSignal.THREAD_STARTED, .seq_cst);
+            if (stopped != StopSignal.THREAD_STOPP_SIGNAL) {
+                fx(inst, xthread) catch |e| std.log.err("error in thread accured: {}", .{e});
+                std.log.warn("l thread has terminated\n", .{});
+            }
+            xthread.stop_signal.inner.store(StopSignal.THREAD_STOPPED, .release);
             stop_event.set();
         }
         pub fn init(
@@ -78,8 +108,7 @@ pub fn WThread(cfg: WThreadConfig) type {
             instance: T_stack,
             f: fn (T_stack, T_Thread) anyerror!void,
         ) !T_This {
-            const running: *AtomicBool = try alloc.create(AtomicBool);
-            running.* = AtomicBool.init(false);
+            const stop_signal = try StopSignal.init(alloc);
             const stop_event = try alloc.create(ResetEvent);
             stop_event.* = ResetEvent{};
             stop_event.reset();
@@ -90,7 +119,7 @@ pub fn WThread(cfg: WThreadConfig) type {
             re2.* = ResetEvent{};
             re2.reset();
             const thread = T_Thread{
-                .is_running = running,
+                .stop_signal = stop_signal,
                 .thread_sets_handle_waits = re1,
                 .handle_sets_thread_waits = re2,
             };
@@ -102,7 +131,7 @@ pub fn WThread(cfg: WThreadConfig) type {
             });
             th.detach();
             return T_This{
-                .is_running = running,
+                .stop_signal = stop_signal,
                 .stop_event = stop_event,
                 .thread_sets_handle_waits = re1,
                 .handle_sets_thread_waits = re2,
@@ -116,7 +145,7 @@ test "test wthread" {
     const T = WThread(cfg);
     const S = struct {
         fn f(s: VoidType, thread: T.ArgumentType) !void {
-            while (thread.is_running.load(.acquire)) {}
+            while (thread.is_running()) {}
             _ = s;
             std.debug.print("\n thread Exited (good)", .{});
         }
@@ -126,7 +155,6 @@ test "test wthread" {
         Void,
         S.f,
     );
-    while (!sv.is_running.load(.acquire)) {}
     try sv.wait_till_stopped(1000 * 1000 * 1000);
     sv.deinit(alloc);
 }

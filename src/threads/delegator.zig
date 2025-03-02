@@ -66,7 +66,7 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
             // std.log.debug("\nwoke up will proces now", .{});
             var chan = inst.channel;
             var instance = inst.instance;
-            while (th.is_running.load(AtomicOrder.acquire)) {
+            while (th.stop_signal.load(AtomicOrder.acquire)) {
                 while (chan.receive()) |msg| {
                     const ret = D.__message_handler(&instance, msg);
                     try chan.send(ret);
@@ -203,9 +203,9 @@ pub fn DelegatorServer(config: DelegatorServerConfig) type {
     const T_DServerChannel = DelegatorChannel(Ret, Args, CHANNEL_CAP);
     const T_WakeupHandle =
         switch (config.realtime_safe) {
-        true => RtsWakeUpHandle,
-        false => BlockingWakeUpHandle,
-    };
+            true => RtsWakeUpHandle,
+            false => BlockingWakeUpHandle,
+        };
     const T_Delegator = config.D(T_DChannel, T_WakeupHandle, *std.Thread.ResetEvent);
     const T = T_Delegator.Type;
     const T_Wthread = switch (config.realtime_safe) {

@@ -97,7 +97,7 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
             const offset = 1000 * 300 * 0;
             var local_timer: Timer = try Timer.start();
             local_timer.reset();
-            while (thread.is_running.load(.acquire)) {
+            while (thread.is_running()) {
                 var time_to_turn = local_timer.read();
                 for (handles[0..]) |*h| {
                     time_to_turn += local_timer.read();
@@ -149,7 +149,6 @@ test "test schedule wake" {
         .slots = 1,
     };
     var sw = try ScheduleWake(swcfg).init(alloc);
-    while (!sw.thread.is_running.load(.acquire)) {}
     const ms = 1_000_000;
 
     const N_measurement = 256;
