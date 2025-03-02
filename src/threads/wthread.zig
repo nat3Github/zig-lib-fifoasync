@@ -76,6 +76,7 @@ pub const WThreadHandle = struct {
     }
     /// if deinit is called before the thread is stopped segfaults will likely crash the programm
     pub fn deinit(self: *This, alloc: Allocator) void {
+        std.debug.assert(self.stop_signal.thread_has_terminated());
         self.stop_signal.deinit(alloc);
         alloc.destroy(self.stop_event);
         alloc.destroy(self.thread_sets_handle_waits);
