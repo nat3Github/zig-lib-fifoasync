@@ -32,6 +32,7 @@ pub const WThreadHandle = struct {
     // this allocator is exposed to the thread make sure it is threadsafe if you use it
     pub fn stop(self: *This) void {
         self.is_running.store(false, .release);
+        self.handle_sets_thread_waits.set();
     }
     pub fn wait_till_stopped(self: *This, time_out_ns: u64) !void {
         self.stop();
