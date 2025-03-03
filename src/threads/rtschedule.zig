@@ -110,21 +110,14 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
         }
         pub fn init(alloc: Allocator) !This {
             var hndles: [cfg.slots]SchedHandleLocal = undefined;
-            for (hndles[0..]) |*j| j.* = try SchedHandleLocal.init(alloc);
+            for (&hndles) |*j| j.* = try SchedHandleLocal.init(alloc);
             const these_handles = try alloc.alloc(SchedHandle, cfg.slots);
             for (these_handles, hndles[0..]) |*j, h| {
                 j.re = h.re;
                 j.att = h.att;
             }
-            const t = try T_Lthread.init(
-                alloc,
-                hndles,
-                This.f,
-            );
-            return This{
-                .thread = t,
-                .sched_handles = these_handles,
-            };
+            const t = try T_Lthread.init(alloc, hndles, This.f);
+            return This{ .thread = t, .sched_handles = these_handles };
         }
         pub fn stop_thread(self: *This) void {
             self.thread.stop();
