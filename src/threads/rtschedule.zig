@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const root = @import("../lib.zig");
 const wthread = root.threads.wthread;
 const Allocator = std.mem.Allocator;
@@ -119,14 +120,13 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
             const t = try T_Lthread.init(alloc, hndles, This.f);
             return This{ .thread = t, .sched_handles = these_handles };
         }
-        pub fn stop_thread(self: *This) void {
-            self.thread.stop();
-        }
-        pub fn wait_till_stopped(self: *This, time_out_ns: u64) !void {
-            try self.thread.wait_till_stopped(time_out_ns);
+        pub fn stop_or_timeout(self: *This, time_out_ns: u64) !void {
+            try self.thread.stop_or_timeout(time_out_ns);
         }
         /// if deinit is called before the thread is stopped segfaults will likely crash the programm
         pub fn deinit(self: *This, alloc: Allocator) void {
+            // NOTE: call stop_or_timeout before calling deinit
+            assert(self.thread.has_terminated());
             for (self.sched_handles) |*h| h.deinit(alloc);
             alloc.free(self.sched_handles);
             self.thread.deinit(alloc);
@@ -159,7 +159,7 @@ test "test schedule wake" {
         std.Thread.sleep(1 * 1e6);
     }
     std.Thread.sleep(1 * 1e6);
-    try sw.thread.wait_till_stopped(std.math.maxInt(u64));
+    try sw.thread.stop_or_timeout(std.math.maxInt(u64));
     stats.basic_stats(mes_arr[0..]);
     sw.deinit(alloc);
 }

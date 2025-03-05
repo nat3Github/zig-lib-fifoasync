@@ -73,14 +73,17 @@ pub const WThreadHandle = struct {
     }
     /// dont call if stopped will dead block
     pub fn spinwait_for_startup(self: *const This) void {
-        if (self.stop_signal.thread_has_terminated()) return;
+        if (self.has_terminated) return;
         while (!self.isRunning()) {}
     }
-    pub fn stop(self: *This) void {
+    fn stop(self: *This) void {
         self.stop_signal.set_stopp_signal();
-        self.handle_sets_thread_waits.set();
+        self.wakeup_waiting_thread();
     }
-    pub fn wait_till_stopped(self: *This, time_out_ns: u64) !void {
+    pub fn has_terminated(self: *const This) bool {
+        return self.stop_signal.thread_has_terminated();
+    }
+    pub fn stop_or_timeout(self: *This, time_out_ns: u64) !void {
         self.stop();
         try self.stop_event.timedWait(time_out_ns);
     }
@@ -100,6 +103,7 @@ pub const WThreadHandle = struct {
     }
     /// if deinit is called before the thread is stopped segfaults will likely crash the programm
     pub fn deinit(self: *This, alloc: Allocator) void {
+        // if this assertion is triggered call wait till stopped
         std.debug.assert(self.stop_signal.thread_has_terminated());
         self.stop_signal.deinit(alloc);
         alloc.destroy(self.stop_event);
@@ -121,11 +125,9 @@ pub fn WThread(cfg: WThreadConfig) type {
         fn exe(inst: T_stack, thread: T_Thread, fx: fn (T_stack, T_Thread) anyerror!void, stop_event: *ResetEvent) void {
             var xthread = thread;
             const stopped = xthread.stop_signal.inner.swap(StopSignal.THREAD_STARTED, .seq_cst);
-            if (stopped != StopSignal.THREAD_STOPP_SIGNAL) {
-                fx(inst, xthread) catch |e| std.log.err("\nerror in thread accured: {}", .{e});
-                std.log.warn("\nl thread has terminated\n", .{});
-            }
+            if (stopped != StopSignal.THREAD_STOPP_SIGNAL) fx(inst, xthread) catch |e| std.log.err("\nerror in thread accured: {}", .{e});
             xthread.stop_signal.inner.store(StopSignal.THREAD_STOPPED, .release);
+            std.log.warn("\nl thread has terminated\n", .{});
             stop_event.set();
         }
         pub fn init(
@@ -170,9 +172,10 @@ test "test wthread" {
     const T = WThread(cfg);
     const S = struct {
         fn f(s: VoidType, thread: T.ArgumentType) !void {
+            std.log.warn("\n thread started (good)", .{});
             while (thread.is_running()) {}
             _ = s;
-            std.debug.print("\n thread Exited (good)", .{});
+            std.log.warn("\n thread Exited (good)", .{});
         }
     };
     var sv = try T.init(
@@ -180,7 +183,8 @@ test "test wthread" {
         Void,
         S.f,
     );
-    try sv.wait_till_stopped(1000 * 1000 * 1000);
+    std.Thread.sleep(1e6);
+    try sv.stop_or_timeout(1 * 1e6);
     sv.deinit(alloc);
 }
 test "test all refs" {
