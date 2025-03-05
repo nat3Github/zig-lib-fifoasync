@@ -122,8 +122,8 @@ pub fn WThread(cfg: WThreadConfig) type {
             var xthread = thread;
             const stopped = xthread.stop_signal.inner.swap(StopSignal.THREAD_STARTED, .seq_cst);
             if (stopped != StopSignal.THREAD_STOPP_SIGNAL) {
-                fx(inst, xthread) catch |e| std.log.err("error in thread accured: {}", .{e});
-                std.log.warn("l thread has terminated\n", .{});
+                fx(inst, xthread) catch |e| std.log.err("\nerror in thread accured: {}", .{e});
+                std.log.warn("\nl thread has terminated\n", .{});
             }
             xthread.stop_signal.inner.store(StopSignal.THREAD_STOPPED, .release);
             stop_event.set();
