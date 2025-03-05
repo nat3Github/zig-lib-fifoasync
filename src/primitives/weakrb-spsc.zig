@@ -12,21 +12,19 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
         front: usize = 0,
         pfront: usize = 0,
         data: []T,
-        gpa: Allocator,
         /// allocates its data and itself on the heap (cant be stack local)
         pub fn init(alloc: Allocator) !*Self {
             const data = try alloc.alloc(T, capacity);
             const this = try alloc.create(Self);
             this.* = .{
-                .gpa = alloc,
                 .data = data,
             };
             return this;
         }
         /// cleans up all data allocated by This including the pointer to itself (dont use the pointer after this)
-        pub fn deinit(self: *Self) void {
-            self.gpa.free(self.data);
-            self.gpa.destroy(self);
+        pub fn deinit(self: *Self, alloc: Allocator) void {
+            alloc.free(self.data);
+            alloc.destroy(self);
         }
         pub fn push_slice(self: *Self, items: []const T) !void {
             const n = items.len;
@@ -76,9 +74,9 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
     };
 }
 test "spsc basic test" {
-    const test_gpa = std.testing.allocator;
-    var fifo = try Fifo(u32, 4).init(test_gpa);
-    defer fifo.deinit();
+    const alloc = std.testing.allocator;
+    var fifo = try Fifo(u32, 4).init(alloc);
+    defer fifo.deinit(alloc);
     for (0..10) |i| {
         const casted: u32 = @intCast(i);
         fifo.push(casted) catch unreachable;
@@ -107,8 +105,8 @@ pub fn LinkedChannel(
                 .receiver = receiver,
             };
         }
-        pub fn deinit(self: *Self) void {
-            self.sender.deinit();
+        pub fn deinit(self: *Self, alloc: Allocator) void {
+            self.sender.deinit(alloc);
         }
     };
 }
@@ -133,8 +131,8 @@ test "2way channel basic test" {
     const channels = try get_bidirectional_linked_channels(test_gpa, u32, i32, 4);
     var base = channels.A_to_B_channel;
     var server = channels.B_to_A_channel;
-    defer base.deinit();
-    defer server.deinit();
+    defer base.deinit(test_gpa);
+    defer server.deinit(test_gpa);
     for (0..10) |i| {
         const casted: u32 = @intCast(i);
         try base.send(casted);

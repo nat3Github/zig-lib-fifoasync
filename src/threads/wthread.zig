@@ -1,4 +1,5 @@
 const std = @import("std");
+const root = @import("../lib.zig");
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 const AtomicOrder = std.builtin.AtomicOrder;
@@ -49,6 +50,15 @@ pub const WThreadArg = struct {
     pub fn is_running(self: *const This) bool {
         return self.stop_signal.thread_is_running();
     }
+    pub fn wakeup_waiting_thread(self: *This) void {
+        self.thread_sets_handle_waits.set();
+    }
+    pub fn reset_event_reset(self: *This) void {
+        self.handle_sets_thread_waits.reset();
+    }
+    pub fn reset_event_wait(self: *This, time_out_ns: u64) !void {
+        try self.handle_sets_thread_waits.timedWait(time_out_ns);
+    }
 };
 
 pub const WThreadHandle = struct {
@@ -73,6 +83,20 @@ pub const WThreadHandle = struct {
     pub fn wait_till_stopped(self: *This, time_out_ns: u64) !void {
         self.stop();
         try self.stop_event.timedWait(time_out_ns);
+    }
+    pub fn wakeup_waiting_thread(self: *This) void {
+        self.handle_sets_thread_waits.set();
+    }
+    pub fn reset_event_reset(self: *This) void {
+        self.thread_sets_handle_waits.reset();
+    }
+    pub fn reset_event_wait(self: *This, time_out_ns: u64) !void {
+        try self.thread_sets_handle_waits.timedWait(time_out_ns);
+    }
+    pub fn setup_rts_waking(self: *This, sh: root.threads.rtschedule.SchedHandle) root.threads.rtschedule.SchedHandle {
+        const shx = sh;
+        shx.re.* = self.handle_sets_thread_waits.*;
+        return shx;
     }
     /// if deinit is called before the thread is stopped segfaults will likely crash the programm
     pub fn deinit(self: *This, alloc: Allocator) void {

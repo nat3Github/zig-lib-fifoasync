@@ -142,13 +142,12 @@ test "test schedule wake" {
         .slots = 1,
     };
     var sw = try ScheduleWake(swcfg).init(alloc);
-    const ms = 1_000_000;
 
     const N_measurement = 256;
     var mes_arr: [N_measurement]u64 = undefined;
 
     var timer = try Timer.start();
-    const time_period = 1 * ms;
+    const time_period = 1 * 1e6;
     const time_out = 100 * time_period;
 
     for (0..N_measurement) |i| {
@@ -157,9 +156,9 @@ test "test schedule wake" {
         try sw.sched_handles[0].wait(time_out);
         const real_time = timer.read();
         mes_arr[i] = real_time;
-        std.Thread.sleep(1 * ms);
+        std.Thread.sleep(1 * 1e6);
     }
-    std.Thread.sleep(1 * ms);
+    std.Thread.sleep(1 * 1e6);
     try sw.thread.wait_till_stopped(std.math.maxInt(u64));
     stats.basic_stats(mes_arr[0..]);
     sw.deinit(alloc);

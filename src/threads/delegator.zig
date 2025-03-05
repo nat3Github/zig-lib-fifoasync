@@ -66,7 +66,7 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
             // std.log.debug("\nwoke up will proces now", .{});
             var chan = inst.channel;
             var instance = inst.instance;
-            while (th.stop_signal.load(AtomicOrder.acquire)) {
+            while (th.is_running()) {
                 while (chan.receive()) |msg| {
                     const ret = D.__message_handler(&instance, msg);
                     try chan.send(ret);
