@@ -112,6 +112,11 @@ pub const WThreadHandle = struct {
     }
 };
 
+/// Abstracts stopping threads, gives you waiting / waking with two reset events via the W_ThreadArg parameter
+/// if you have a custom function which does not terminate check for the stop signal like:
+/// while (W_ThreadArg.is_running()) {
+///     // my periodic code
+/// }
 pub fn WThread(cfg: WThreadConfig) type {
     const T_This = WThreadHandle;
     const T_Thread = WThreadArg;
