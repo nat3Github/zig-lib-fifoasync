@@ -87,8 +87,7 @@ const ScheduleWakeConfig = struct {
 pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
     return struct {
         const This = @This();
-        const T_Lthread = wthread.WThread(wthread.WThreadConfig.init([cfg.slots]SchedHandleLocal));
-
+        const T_Lthread = wthread.WThread(.{ .T_stack_type = [cfg.slots]SchedHandleLocal, .debug_name = "Schedule Wake" });
         thread: T_Lthread.InitReturnType,
         sched_handles: []SchedHandle,
         fn f(self: [cfg.slots]SchedHandleLocal, thread: T_Lthread.ArgumentType) !void {
@@ -98,7 +97,7 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
             const offset = 1000 * 300 * 0;
             var local_timer: Timer = try Timer.start();
             local_timer.reset();
-            while (thread.is_running()) {
+            while (thread.should_run()) {
                 var time_to_turn = local_timer.read();
                 for (handles[0..]) |*h| {
                     time_to_turn += local_timer.read();

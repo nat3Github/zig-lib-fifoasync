@@ -1,6 +1,7 @@
 .{
     .fingerprint = 0xbe2de7db0000fa5e,
-    .name = .fifoasync,
+    // .name = .fifoasync,
+    .name = "fifoasync",
     .version = "0.0.0",
     .dependencies = .{
         .ziggen = .{

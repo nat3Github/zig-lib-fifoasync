@@ -1,5 +1,7 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const root = @import("../lib.zig");
+const rtsp = root.threads.rtschedule;
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 const AtomicOrder = std.builtin.AtomicOrder;
@@ -15,21 +17,25 @@ pub const StopSignal = struct {
     const THREAD_STARTED = 1;
     const THREAD_STOPP_SIGNAL = 2;
     const THREAD_STOPPED = 3;
-    pub fn thread_is_running(self: *const This) bool {
-        return self.inner.load(.acquire) != THREAD_STOPP_SIGNAL;
+    pub fn is_stop_signal(self: *const This) bool {
+        return self.inner.load(.acquire) == THREAD_STOPP_SIGNAL;
     }
-    pub fn thread_has_terminated(self: *const This) bool {
+    pub fn has_started(self: *const This) bool {
+        return self.inner.load(.acquire) >= THREAD_STARTED;
+    }
+    pub fn is_stopped(self: *const This) bool {
         return self.inner.load(.acquire) == THREAD_STOPPED;
     }
-    pub fn set_stopp_signal(self: *const This) void {
+    fn set_stopp_signal(self: *const This) void {
         self.inner.store(THREAD_STOPP_SIGNAL, .release);
     }
-    pub fn init(alloc: Allocator) !This {
+
+    fn init(alloc: Allocator) !This {
         const running: *AtomicU8 = try alloc.create(AtomicU8);
         running.* = AtomicU8.init(THREAD_NOT_STARTED);
         return This{ .inner = running };
     }
-    pub fn deinit(self: *const This, alloc: Allocator) void {
+    fn deinit(self: *const This, alloc: Allocator) void {
         alloc.destroy(self.inner);
     }
 };
@@ -37,9 +43,7 @@ pub const StopSignal = struct {
 pub const WThreadConfig = struct {
     const This = @This();
     T_stack_type: type = VoidType,
-    pub fn init(T: type) This {
-        return This{ .T_stack_type = T };
-    }
+    debug_name: [:0]const u8 = "",
 };
 
 pub const WThreadArg = struct {
@@ -47,8 +51,8 @@ pub const WThreadArg = struct {
     stop_signal: StopSignal,
     thread_sets_handle_waits: *ResetEvent,
     handle_sets_thread_waits: *ResetEvent,
-    pub fn is_running(self: *const This) bool {
-        return self.stop_signal.thread_is_running();
+    pub fn should_run(self: *const This) bool {
+        return !self.stop_signal.is_stop_signal();
     }
     pub fn wakeup_waiting_thread(self: *This) void {
         self.thread_sets_handle_waits.set();
@@ -61,85 +65,112 @@ pub const WThreadArg = struct {
     }
 };
 
-pub const WThreadHandle = struct {
-    const This = @This();
-    stop_signal: StopSignal,
-    stop_event: *ResetEvent,
-    thread_sets_handle_waits: *ResetEvent,
-    handle_sets_thread_waits: *ResetEvent,
-    // this allocator is exposed to the thread make sure it is threadsafe if you use it
-    pub fn isRunning(self: *const This) bool {
-        return self.stop_signal.thread_is_running();
-    }
-    /// dont call if stopped will dead block
-    pub fn spinwait_for_startup(self: *const This) void {
-        if (self.has_terminated) return;
-        while (!self.isRunning()) {}
-    }
-    fn stop(self: *This) void {
-        self.stop_signal.set_stopp_signal();
-        self.wakeup_waiting_thread();
-    }
-    pub fn has_terminated(self: *const This) bool {
-        return self.stop_signal.thread_has_terminated();
-    }
-    pub fn stop_or_timeout(self: *This, time_out_ns: u64) !void {
-        self.stop();
-        try self.stop_event.timedWait(time_out_ns);
-    }
-    pub fn wakeup_waiting_thread(self: *This) void {
-        self.handle_sets_thread_waits.set();
-    }
-    pub fn reset_event_reset(self: *This) void {
-        self.thread_sets_handle_waits.reset();
-    }
-    pub fn reset_event_wait(self: *This, time_out_ns: u64) !void {
-        try self.thread_sets_handle_waits.timedWait(time_out_ns);
-    }
-    pub fn setup_rts_waking(self: *This, sh: root.threads.rtschedule.SchedHandle) root.threads.rtschedule.SchedHandle {
-        const shx = sh;
-        shx.re.* = self.handle_sets_thread_waits.*;
-        return shx;
-    }
-    /// if deinit is called before the thread is stopped segfaults will likely crash the programm
-    pub fn deinit(self: *This, alloc: Allocator) void {
-        // if this assertion is triggered call wait till stopped
-        std.debug.assert(self.stop_signal.thread_has_terminated());
-        self.stop_signal.deinit(alloc);
-        alloc.destroy(self.stop_event);
-        alloc.destroy(self.thread_sets_handle_waits);
-        alloc.destroy(self.handle_sets_thread_waits);
-    }
+pub const WThreadHandleConfig = struct {
+    owns_handle_sets_thread_waits: bool,
 };
+pub fn WThreadHandle(cfg: WThreadHandleConfig) type {
+    return struct {
+        const This = @This();
+        stop_signal: StopSignal,
+        stop_event: *ResetEvent,
+        thread_sets_handle_waits: *ResetEvent,
+        handle_sets_thread_waits: *ResetEvent,
 
+        pub fn spinwait_for_startup(self: *const This) void {
+            assert(!self.stop_signal.is_stop_signal());
+            assert(!self.stop_signal.is_stopped());
+            while (!self.stop_signal.has_started()) {}
+        }
+
+        pub fn has_terminated(self: *const This) bool {
+            return self.stop_signal.is_stopped();
+        }
+
+        pub fn stop_or_timeout(self: *This, time_out_ns: u64) !void {
+            // note we only can stopp the thread if its started (thread function may run some cleanup logic thats get skipped otherwise)
+            if (self.stop_signal.is_stopped()) return;
+            if (self.stop_signal.is_stop_signal()) {
+                self.wakeup_waiting_thread();
+                try self.stop_event.timedWait(time_out_ns);
+            } else {
+                var timer = std.time.Timer.start() catch unreachable;
+                while (!self.stop_signal.has_started()) if (timer.read() + 1000 > time_out_ns) return error.Timeout;
+                self.stop_signal.set_stopp_signal();
+                self.wakeup_waiting_thread();
+                const remaining_ns = std.math.sub(u64, time_out_ns, timer.read()) catch 0;
+                try self.stop_event.timedWait(remaining_ns);
+            }
+        }
+        pub fn wakeup_waiting_thread(self: *This) void {
+            self.handle_sets_thread_waits.set();
+        }
+        pub fn reset_event_reset(self: *This) void {
+            self.thread_sets_handle_waits.reset();
+        }
+        pub fn reset_event_wait(self: *This, time_out_ns: u64) !void {
+            try self.thread_sets_handle_waits.timedWait(time_out_ns);
+        }
+        /// if deinit is called before the thread is stopped segfaults will likely crash the programm
+        pub fn deinit(self: *This, alloc: Allocator) void {
+            // if this assertion is triggered call wait till stopped
+            std.debug.assert(self.has_terminated());
+
+            self.stop_signal.deinit(alloc);
+            alloc.destroy(self.stop_event);
+            if (cfg.owns_handle_sets_thread_waits) alloc.destroy(self.handle_sets_thread_waits);
+            alloc.destroy(self.thread_sets_handle_waits);
+        }
+    };
+}
 /// Abstracts stopping threads, gives you waiting / waking with two reset events via the W_ThreadArg parameter
 /// if you have a custom function which does not terminate check for the stop signal like:
 /// while (W_ThreadArg.is_running()) {
 ///     // my periodic code
 /// }
 pub fn WThread(cfg: WThreadConfig) type {
-    const T_This = WThreadHandle;
     const T_Thread = WThreadArg;
     const T_stack = cfg.T_stack_type;
     return struct {
         const This = @This();
         pub const config = cfg;
-        pub const InitReturnType = T_This;
         pub const ArgumentType = T_Thread;
+        pub const InitReturnType = WThreadHandle(.{ .owns_handle_sets_thread_waits = true });
+        pub const InitReturnTypeWithSchedHandle = WThreadHandle(.{ .owns_handle_sets_thread_waits = false });
 
         fn exe(inst: T_stack, thread: T_Thread, fx: fn (T_stack, T_Thread) anyerror!void, stop_event: *ResetEvent) void {
             var xthread = thread;
-            const stopped = xthread.stop_signal.inner.swap(StopSignal.THREAD_STARTED, .seq_cst);
-            if (stopped != StopSignal.THREAD_STOPP_SIGNAL) fx(inst, xthread) catch |e| std.log.err("\nerror in thread accured: {}", .{e});
+            xthread.stop_signal.inner.store(StopSignal.THREAD_STARTED, .release);
+            fx(inst, xthread) catch |e| std.log.err("{s}: \nerror: {}", .{ cfg.debug_name, e });
             xthread.stop_signal.inner.store(StopSignal.THREAD_STOPPED, .release);
-            std.log.warn("\nl thread has terminated\n", .{});
+            std.log.warn("{s} Thread is terminating...\n", .{cfg.debug_name});
             stop_event.set();
+        }
+        /// NOTE: sched_handle must be valid for the lifetime of WTthread!
+        pub fn init_with_sched_handle(
+            alloc: Allocator,
+            instance: T_stack,
+            f: fn (T_stack, T_Thread) anyerror!void,
+            sched_handle: rtsp.SchedHandle,
+        ) !WThreadHandle(.{ .owns_handle_sets_thread_waits = false }) {
+            const stop_signal = try StopSignal.init(alloc);
+            const stop_event = try alloc.create(ResetEvent);
+            stop_event.* = ResetEvent{};
+            stop_event.reset();
+            const re1 = try alloc.create(ResetEvent);
+            re1.* = ResetEvent{};
+            re1.reset();
+            const re2 = sched_handle.re;
+            re2.reset();
+            const thread = T_Thread{ .stop_signal = stop_signal, .thread_sets_handle_waits = re1, .handle_sets_thread_waits = re2 };
+            const th = try std.Thread.spawn(.{ .allocator = alloc }, This.exe, .{ instance, thread, f, stop_event });
+            th.detach();
+            return WThreadHandle(.{ .owns_handle_sets_thread_waits = false }){ .stop_signal = stop_signal, .stop_event = stop_event, .thread_sets_handle_waits = re1, .handle_sets_thread_waits = re2 };
         }
         pub fn init(
             alloc: Allocator,
             instance: T_stack,
             f: fn (T_stack, T_Thread) anyerror!void,
-        ) !T_This {
+        ) !WThreadHandle(.{ .owns_handle_sets_thread_waits = true }) {
             const stop_signal = try StopSignal.init(alloc);
             const stop_event = try alloc.create(ResetEvent);
             stop_event.* = ResetEvent{};
@@ -150,24 +181,10 @@ pub fn WThread(cfg: WThreadConfig) type {
             const re2 = try alloc.create(ResetEvent);
             re2.* = ResetEvent{};
             re2.reset();
-            const thread = T_Thread{
-                .stop_signal = stop_signal,
-                .thread_sets_handle_waits = re1,
-                .handle_sets_thread_waits = re2,
-            };
-            const th = try std.Thread.spawn(.{ .allocator = alloc }, This.exe, .{
-                instance,
-                thread,
-                f,
-                stop_event,
-            });
+            const thread = T_Thread{ .stop_signal = stop_signal, .thread_sets_handle_waits = re1, .handle_sets_thread_waits = re2 };
+            const th = try std.Thread.spawn(.{ .allocator = alloc }, This.exe, .{ instance, thread, f, stop_event });
             th.detach();
-            return T_This{
-                .stop_signal = stop_signal,
-                .stop_event = stop_event,
-                .thread_sets_handle_waits = re1,
-                .handle_sets_thread_waits = re2,
-            };
+            return WThreadHandle(.{ .owns_handle_sets_thread_waits = true }){ .stop_signal = stop_signal, .stop_event = stop_event, .thread_sets_handle_waits = re1, .handle_sets_thread_waits = re2 };
         }
     };
 }
@@ -178,7 +195,7 @@ test "test wthread" {
     const S = struct {
         fn f(s: VoidType, thread: T.ArgumentType) !void {
             std.log.warn("\n thread started (good)", .{});
-            while (thread.is_running()) {}
+            while (thread.should_run()) {}
             _ = s;
             std.log.warn("\n thread Exited (good)", .{});
         }
