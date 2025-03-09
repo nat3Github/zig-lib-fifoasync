@@ -7,6 +7,12 @@ const Allocator = std.mem.Allocator;
 const ResetEvent = std.Thread.ResetEvent;
 const Timer = std.time.Timer;
 
+fn make_reset_event(alloc: Allocator) !*ResetEvent {
+    const re = try alloc.create(ResetEvent);
+    re.* = ResetEvent{};
+    re.reset();
+    return re;
+}
 /// NOTE: need to use 64 because 32 is only equal to 5 seconds as NanoSeconds
 /// so value is a u64 and protected through atomic access if methods are called on it
 /// u64 value is refering to NanoSeconds
@@ -44,7 +50,7 @@ const SchedHandleLocal = struct {
     att: SchedTime,
     local_counter: u64 = 0,
     pub fn init(alloc: Allocator) !This {
-        const vre = try alloc.create(ResetEvent);
+        const vre = try make_reset_event(alloc);
         const vatt = try SchedTime.init(alloc);
         return This{
             .att = vatt,
@@ -70,7 +76,6 @@ pub const SchedHandle = struct {
         self.att.deinit(alloc);
     }
     pub fn schedule(self: *This, time_ns: u64) void {
-        self.re.reset();
         self.att.set(time_ns);
     }
     pub fn wait(self: *This, time_out_ns: u64) !void {
