@@ -108,7 +108,7 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
                         }
                         if (handle.target_ns != 0) can_reset = false;
                     }
-                    // if (can_reset) t.reset();
+                    if (can_reset) t.reset();
                     if (!thread.should_run()) break;
                 }
             }
@@ -150,7 +150,7 @@ test "test schedule wake" {
     const alloc = heapalloc.allocator();
     // const alloc = std.testing.allocator;
     const swcfg = ScheduleWakeConfig{
-        .slots = 128,
+        .slots = 1024,
     };
     var sw = try ScheduleWake(swcfg).init(alloc);
 
