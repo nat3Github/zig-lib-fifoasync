@@ -17,30 +17,32 @@ fn make_reset_event(alloc: Allocator) !*ResetEvent {
 /// so value is a u64 and protected through atomic access if methods are called on it
 /// u64 value is refering to NanoSeconds
 /// u64 maximum integer is the null value,
+const Atomic = std.atomic.Value;
+const AtomicU64 = Atomic(u64);
 pub const SchedTime = struct {
     const NullValue: u64 = std.math.maxInt(u64);
     const This = @This();
     /// not threadsafe to use use get and set
-    _value: *u64,
+    _value: *AtomicU64,
     /// init self with null value
-    pub fn init(gpa: Allocator) !This {
-        const v = try gpa.create(u64);
-        v.* = NullValue;
+    pub fn init(alloc: Allocator) !This {
+        const v = try alloc.create(AtomicU64);
+        v.* = AtomicU64.init(NullValue);
         return This{ ._value = v };
     }
     // pub fn deinit(gpa: Allocator)
-    pub fn deinit(self: *This, gpa: Allocator) void {
-        gpa.destroy(self._value);
+    pub fn deinit(self: *This, alloc: Allocator) void {
+        alloc.destroy(self._value);
     }
     pub fn get(self: *const This) ?u64 {
-        const val = @atomicLoad(u64, self._value, .acquire);
+        const val = self._value.load(.acquire);
         if (val == NullValue) return null else return val;
     }
     pub fn set(self: *const This, val: ?u64) void {
         if (val) |v| {
-            std.debug.assert(v != NullValue);
-            @atomicStore(usize, self._value, v, .release);
-        } else @atomicStore(usize, self._value, NullValue, .release);
+            const xval = if (val == NullValue) v - 1 else v;
+            self._value.store(xval, .release);
+        } else self._value.store(NullValue, .release);
     }
 };
 
@@ -57,13 +59,14 @@ const SchedHandleLocal = struct {
             .re = vre,
         };
     }
-    pub fn check(self: *This, time_progress_nano: u64, compensation: u64) void {
-        const x = self.att.get() orelse return;
-        self.local_counter += time_progress_nano;
-        if (self.local_counter + compensation >= x) {
-            self.att.set(null);
-            self.re.set();
-            self.local_counter = 0;
+    pub fn progress_clock(self: *This, time_progress_nano: u64, compensation: u64) void {
+        if (self.att.get()) |event| {
+            self.local_counter += time_progress_nano;
+            if (self.local_counter + compensation >= event) {
+                self.local_counter = 0;
+                self.att.set(null);
+                self.re.set();
+            }
         }
     }
 };
@@ -75,11 +78,12 @@ pub const SchedHandle = struct {
         alloc.destroy(self.re);
         self.att.deinit(alloc);
     }
-    pub fn schedule(self: *This, time_ns: u64) void {
+    pub fn schedule(self: *This, time_ns: u64) !void {
+        if (self.att.get() != null) return error.SchedHandleNotNull;
         self.att.set(time_ns);
     }
     pub fn wait(self: *This, time_out_ns: u64) !void {
-        std.debug.assert(!self.re.isSet());
+        assert(!self.re.isSet());
         try self.re.timedWait(time_out_ns);
     }
 };
@@ -87,6 +91,7 @@ pub const SchedHandle = struct {
 const ScheduleWakeConfig = struct {
     /// how many wake handles are processed
     slots: usize = 1024,
+    compensation_ns: u64 = 0,
 };
 /// schedule waking a thread with sub ms accuracy:
 pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
@@ -97,20 +102,15 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
         sched_handles: []SchedHandle,
         fn f(self: [cfg.slots]SchedHandleLocal, thread: T_Lthread.ArgumentType) !void {
             var handles = self;
-            handles[0].check(0, 0);
-            var compensation: u64 = 0;
-            const offset = 1000 * 300 * 0;
-            var local_timer: Timer = try Timer.start();
+            var local_timer: Timer = Timer.start() catch unreachable;
             local_timer.reset();
-            while (thread.should_run()) {
-                var time_to_turn = local_timer.read();
-                for (handles[0..]) |*h| {
-                    time_to_turn += local_timer.read();
-                    h.check(time_to_turn, compensation);
-                }
-                time_to_turn += local_timer.read();
+            while (true) {
                 local_timer.reset();
-                compensation = (compensation + time_to_turn) / 2 + offset;
+                for (handles[0..]) |*h| {
+                    h.progress_clock(local_timer.read(), cfg.compensation_ns);
+                }
+                if (local_timer.read() > 600e3) unreachable;
+                if (!thread.should_run()) break;
             }
         }
         pub fn init(alloc: Allocator) !This {
@@ -138,12 +138,11 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
     };
 }
 test "test schedule wake" {
-    //TODO
     var heapalloc = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = heapalloc.allocator();
     // const alloc = std.testing.allocator;
     const swcfg = ScheduleWakeConfig{
-        .slots = 1,
+        .slots = 128,
     };
     var sw = try ScheduleWake(swcfg).init(alloc);
 
@@ -151,19 +150,22 @@ test "test schedule wake" {
     var mes_arr: [N_measurement]u64 = undefined;
 
     var timer = try Timer.start();
-    const time_period = 1 * 1e6;
-    const time_out = 100 * time_period;
-
-    for (0..N_measurement) |i| {
+    sw.thread.spinwait_for_startup();
+    var i: usize = 0;
+    const sh = &sw.sched_handles[0];
+    assert(sh.att.get() == null);
+    sh.re.reset();
+    while (i < mes_arr.len) {
         timer.reset();
-        sw.sched_handles[0].schedule(time_period);
-        try sw.sched_handles[0].wait(time_out);
-        const real_time = timer.read();
+        const sched: u64 = 10e6;
+        try sh.schedule(sched);
+        try sh.wait(10 * sched);
+        sh.re.reset();
+        const real_time = timer.read() - sched;
         mes_arr[i] = real_time;
-        std.Thread.sleep(1 * 1e6);
+        i += 1;
     }
-    std.Thread.sleep(1 * 1e6);
-    try sw.thread.stop_or_timeout(std.math.maxInt(u64));
+    try sw.stop_or_timeout(std.math.maxInt(u64));
     stats.basic_stats(mes_arr[0..]);
     sw.deinit(alloc);
 }
