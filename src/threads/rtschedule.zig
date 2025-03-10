@@ -13,10 +13,6 @@ fn make_reset_event(alloc: Allocator) !*ResetEvent {
     re.reset();
     return re;
 }
-/// NOTE: need to use 64 because 32 is only equal to 5 seconds as NanoSeconds
-/// so value is a u64 and protected through atomic access if methods are called on it
-/// u64 value is refering to NanoSeconds
-/// u64 maximum integer is the null value,
 const Atomic = std.atomic.Value;
 const AtomicU64 = Atomic(u64);
 pub const SchedTime = struct {
@@ -35,14 +31,14 @@ pub const SchedTime = struct {
         alloc.destroy(self._value);
     }
     pub fn get(self: *const This) ?u64 {
-        const val = self._value.load(.acquire);
+        const val = self._value.load(.seq_cst);
         if (val == NullValue) return null else return val;
     }
     pub fn set(self: *const This, val: ?u64) void {
         if (val) |v| {
             const xval = if (val == NullValue) v - 1 else v;
-            self._value.store(xval, .release);
-        } else self._value.store(NullValue, .release);
+            self._value.store(xval, .seq_cst);
+        } else self._value.store(NullValue, .seq_cst);
     }
 };
 
@@ -50,7 +46,7 @@ const SchedHandleLocal = struct {
     const This = @This();
     re: *ResetEvent,
     att: SchedTime,
-    local_counter: u64 = 0,
+    target_ns: u64 = 0,
     pub fn init(alloc: Allocator) !This {
         const vre = try make_reset_event(alloc);
         const vatt = try SchedTime.init(alloc);
@@ -59,25 +55,15 @@ const SchedHandleLocal = struct {
             .re = vre,
         };
     }
-    pub fn progress_clock(self: *This, time_progress_nano: u64, compensation: u64) void {
-        if (self.att.get()) |event| {
-            self.local_counter += time_progress_nano;
-            if (self.local_counter + compensation >= event) {
-                self.local_counter = 0;
-                self.att.set(null);
-                self.re.set();
-            }
-        }
+    pub fn deinit(self: *This, alloc: Allocator) void {
+        alloc.destroy(self.re);
+        self.att.deinit(alloc);
     }
 };
 pub const SchedHandle = struct {
     const This = @This();
     re: *ResetEvent,
     att: SchedTime,
-    pub fn deinit(self: *This, alloc: Allocator) void {
-        alloc.destroy(self.re);
-        self.att.deinit(alloc);
-    }
     pub fn schedule(self: *This, time_ns: u64) !void {
         if (self.att.get() != null) return error.SchedHandleNotNull;
         self.att.set(time_ns);
@@ -97,43 +83,65 @@ const ScheduleWakeConfig = struct {
 pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
     return struct {
         const This = @This();
-        const T_Lthread = wthread.WThread(.{ .T_stack_type = [cfg.slots]SchedHandleLocal, .debug_name = "Schedule Wake" });
+        const T_Lthread = wthread.WThread(.{ .T_stack_type = TStack, .debug_name = "Schedule Wake" });
+
         thread: T_Lthread.InitReturnType,
         sched_handles: []SchedHandle,
-        fn f(self: [cfg.slots]SchedHandleLocal, thread: T_Lthread.ArgumentType) !void {
-            var handles = self;
-            var local_timer: Timer = Timer.start() catch unreachable;
-            local_timer.reset();
-            while (true) {
-                local_timer.reset();
-                for (handles[0..]) |*h| {
-                    h.progress_clock(local_timer.read(), cfg.compensation_ns);
+        _privat_cleanup_hndls: []SchedHandleLocal,
+
+        const TStack = struct {
+            handles: []SchedHandleLocal,
+            fn f(self: TStack, thread: T_Lthread.ArgumentType) !void {
+                const handles = self.handles;
+                var t: Timer = Timer.start() catch unreachable;
+                while (true) {
+                    var can_reset = true;
+                    for (handles[0..]) |*handle| {
+                        if (handle.target_ns == 0) {
+                            if (handle.att.get()) |next_ns| {
+                                handle.target_ns = t.read() + next_ns;
+                            }
+                        } else if (t.read() >= t.read()) {
+                            handle.target_ns = 0;
+                            handle.att.set(null);
+                            handle.re.set();
+                        }
+                        if (handle.target_ns != 0) can_reset = false;
+                    }
+                    if (can_reset) t.reset();
+                    if (!thread.should_run()) break;
                 }
-                if (local_timer.read() > 600e3) unreachable;
-                if (!thread.should_run()) break;
             }
-        }
+        };
         pub fn init(alloc: Allocator) !This {
-            var hndles: [cfg.slots]SchedHandleLocal = undefined;
-            for (&hndles) |*j| j.* = try SchedHandleLocal.init(alloc);
-            const these_handles = try alloc.alloc(SchedHandle, cfg.slots);
-            for (these_handles, hndles[0..]) |*j, h| {
-                j.re = h.re;
-                j.att = h.att;
+            const loc_handles = try alloc.alloc(SchedHandleLocal, cfg.slots);
+            for (loc_handles) |*j| j.* = try SchedHandleLocal.init(alloc);
+            const sched_handles = try alloc.alloc(SchedHandle, cfg.slots);
+            for (sched_handles, loc_handles) |*sh, hn| {
+                sh.re = hn.re;
+                sh.att = hn.att;
             }
-            const t = try T_Lthread.init(alloc, hndles, This.f);
-            return This{ .thread = t, .sched_handles = these_handles };
-        }
-        pub fn stop_or_timeout(self: *This, time_out_ns: u64) !void {
-            try self.thread.stop_or_timeout(time_out_ns);
+            const inst = TStack{
+                .handles = loc_handles,
+            };
+            const t = try T_Lthread.init(alloc, inst, TStack.f);
+            return This{
+                .thread = t,
+                .sched_handles = sched_handles,
+                ._privat_cleanup_hndls = loc_handles,
+            };
         }
         /// if deinit is called before the thread is stopped segfaults will likely crash the programm
         pub fn deinit(self: *This, alloc: Allocator) void {
             // NOTE: call stop_or_timeout before calling deinit
             assert(self.thread.has_terminated());
-            for (self.sched_handles) |*h| h.deinit(alloc);
+            for (self._privat_cleanup_hndls) |*h| h.deinit(alloc);
             alloc.free(self.sched_handles);
+            alloc.free(self._privat_cleanup_hndls);
             self.thread.deinit(alloc);
+        }
+        pub fn stop_or_timeout(self: *This, time_out_ns: u64) !void {
+            try self.thread.stop_or_timeout(time_out_ns);
         }
     };
 }
@@ -146,7 +154,7 @@ test "test schedule wake" {
     };
     var sw = try ScheduleWake(swcfg).init(alloc);
 
-    const N_measurement = 256;
+    const N_measurement = 128;
     var mes_arr: [N_measurement]u64 = undefined;
 
     var timer = try Timer.start();
@@ -158,10 +166,10 @@ test "test schedule wake" {
     while (i < mes_arr.len) {
         timer.reset();
         const sched: u64 = 10e6;
-        try sh.schedule(sched);
-        try sh.wait(10 * sched);
+        try sh.schedule(100e3);
+        sh.wait(10 * sched) catch unreachable;
         sh.re.reset();
-        const real_time = timer.read() - sched;
+        const real_time = timer.read();
         mes_arr[i] = real_time;
         i += 1;
     }
