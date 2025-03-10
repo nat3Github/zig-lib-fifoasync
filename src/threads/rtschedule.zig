@@ -101,14 +101,14 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
                             if (handle.att.get()) |next_ns| {
                                 handle.target_ns = t.read() + next_ns;
                             }
-                        } else if (t.read() >= t.read()) {
+                        } else if (t.read() >= handle.target_ns) {
                             handle.target_ns = 0;
                             handle.att.set(null);
                             handle.re.set();
                         }
                         if (handle.target_ns != 0) can_reset = false;
                     }
-                    if (can_reset) t.reset();
+                    // if (can_reset) t.reset();
                     if (!thread.should_run()) break;
                 }
             }
@@ -166,7 +166,7 @@ test "test schedule wake" {
     while (i < mes_arr.len) {
         timer.reset();
         const sched: u64 = 10e6;
-        try sh.schedule(100e3);
+        try sh.schedule(sched);
         sh.wait(10 * sched) catch unreachable;
         sh.re.reset();
         const real_time = timer.read();
