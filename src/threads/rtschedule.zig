@@ -101,7 +101,7 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
                             if (handle.att.get()) |next_ns| {
                                 handle.target_ns = t.read() + next_ns;
                             }
-                        } else if (t.read() >= handle.target_ns) {
+                        } else if (t.read() + cfg.compensation_ns >= handle.target_ns) {
                             handle.target_ns = 0;
                             handle.att.set(null);
                             handle.re.set();
