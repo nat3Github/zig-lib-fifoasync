@@ -30,15 +30,15 @@ pub const SchedTime = struct {
     pub fn deinit(self: *This, alloc: Allocator) void {
         alloc.destroy(self._value);
     }
-    pub fn get(self: *const This) ?u64 {
-        const val = self._value.load(.seq_cst);
+    pub fn load(self: *const This) ?u64 {
+        const val = self._value.load(.acquire);
         if (val == NullValue) return null else return val;
     }
-    pub fn set(self: *const This, val: ?u64) void {
+    pub fn store(self: *const This, val: ?u64) void {
         if (val) |v| {
             const xval = if (val == NullValue) v - 1 else v;
-            self._value.store(xval, .seq_cst);
-        } else self._value.store(NullValue, .seq_cst);
+            self._value.store(xval, .release);
+        } else self._value.store(NullValue, .release);
     }
 };
 
@@ -46,7 +46,7 @@ const SchedHandleLocal = struct {
     const This = @This();
     re: *ResetEvent,
     att: SchedTime,
-    target_ns: u64 = 0,
+    target_ns: ?u64 = null,
     pub fn init(alloc: Allocator) !This {
         const vre = try make_reset_event(alloc);
         const vatt = try SchedTime.init(alloc);
@@ -65,8 +65,8 @@ pub const SchedHandle = struct {
     re: *ResetEvent,
     att: SchedTime,
     pub fn schedule(self: *This, time_ns: u64) !void {
-        if (self.att.get() != null) return error.SchedHandleNotNull;
-        self.att.set(time_ns);
+        if (self.att.load() != null) return error.SchedHandleNotNull;
+        self.att.store(time_ns);
     }
     pub fn wait(self: *This, time_out_ns: u64) !void {
         assert(!self.re.isSet());
@@ -94,20 +94,23 @@ pub fn ScheduleWake(cfg: ScheduleWakeConfig) type {
             fn f(self: TStack, thread: T_Lthread.ArgumentType) !void {
                 const handles = self.handles;
                 var t: Timer = Timer.start() catch unreachable;
+                var t_cycle: u64 = 0;
                 while (true) {
                     var can_reset = true;
+                    const t_zero = t.read();
                     for (handles[0..]) |*handle| {
-                        if (handle.target_ns == 0) {
-                            if (handle.att.get()) |next_ns| {
-                                handle.target_ns = t.read() + next_ns;
+                        if (handle.target_ns == null) {
+                            if (handle.att.load()) |next_ns| {
+                                handle.target_ns = std.math.sub(u64, t.read() + next_ns, t_cycle) catch 0;
+                                handle.att.store(null);
                             }
-                        } else if (t.read() + cfg.compensation_ns >= handle.target_ns) {
-                            handle.target_ns = 0;
-                            handle.att.set(null);
+                        } else if (t.read() + cfg.compensation_ns >= handle.target_ns.?) {
+                            handle.target_ns = null;
                             handle.re.set();
                         }
-                        if (handle.target_ns != 0) can_reset = false;
+                        if (handle.target_ns != null) can_reset = false;
                     }
+                    t_cycle = t_cycle / 2 + (std.math.sub(u64, t.read(), t_zero) catch 0) / 2;
                     if (can_reset) t.reset();
                     if (!thread.should_run()) break;
                 }
@@ -161,7 +164,7 @@ test "test schedule wake" {
     sw.thread.spinwait_for_startup();
     var i: usize = 0;
     const sh = &sw.sched_handles[0];
-    assert(sh.att.get() == null);
+    assert(sh.att.load() == null);
     sh.re.reset();
     while (i < mes_arr.len) {
         timer.reset();
