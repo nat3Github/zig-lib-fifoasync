@@ -47,7 +47,7 @@ const PrioritySchedularConfig = struct {
     order: usize = 16,
     slot_count: usize = 2048,
     tier_count: usize = 3,
-    thread_count: usize = 16,
+    thread_count: usize = 8,
 };
 /// Generic type erased Task
 /// if arguments ore return values are needed they must be somehow stored in the instance
@@ -106,8 +106,11 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
                         task.call();
                         self.switch_to_tier(0);
                     } else {
-                        if (self.tier + 1 == N_tiers) self.switch_to_tier(0);
-                        self.switch_to_tier(self.tier + 1);
+                        if (self.tier + 1 == N_tiers) {
+                            self.switch_to_tier(0);
+                        } else {
+                            self.switch_to_tier(self.tier + 1);
+                        }
                     }
                     if (!thread.should_run()) break;
                 }
@@ -168,16 +171,24 @@ const ExampleStruct = struct {
     const This = @This();
     age: usize = 99,
     name: []const u8,
+    timer: Timer,
     pub fn say_my_name(self: *This) void {
+        self.time();
         std.log.warn("my name is {s} and my age is {}", .{ self.name, self.age });
     }
     pub fn say_my_name_lie(self: *This) void {
+        self.time();
         self.age -= 10;
-        std.log.warn("my name is peter schmutzig and my age is {}", .{ self.name, self.age });
+        std.log.warn("my name is peter schmutzig and my age is {}", .{self.age});
     }
     pub fn say_my_name_type_erased(any_self: *anyopaque) void {
         const self = recast(This, any_self);
         self.say_my_name();
+    }
+    fn time(self: *This) void {
+        const t = self.timer.read();
+        const t_f: f64 = @floatFromInt(t);
+        std.log.warn("elapsed: {d:.3} ms", .{t_f / 1e6});
     }
 
     pub fn say_my_name_lie_type_erased(any_self: *anyopaque) void {
@@ -185,25 +196,54 @@ const ExampleStruct = struct {
         self.say_my_name_lie();
     }
 };
-const PrioSched = PrioritySchedular(.{ .order = 16, .slot_count = 2048, .thread_count = 16, .tier_count = 2 });
+const PrioSched = PrioritySchedular(.{
+    .order = 16,
+    .slot_count = 2048,
+    .thread_count = 8,
+    .tier_count = 1,
+});
 test "prio sched init test" {
     const alloc = std.testing.allocator;
     var ps = try PrioSched.init(alloc);
     const ex_struct = try alloc.create(ExampleStruct);
     defer alloc.destroy(ex_struct);
-    ex_struct.* = ExampleStruct{ .age = 90, .name = "peter kunz" };
+    const ex_struct2 = try alloc.create(ExampleStruct);
+    defer alloc.destroy(ex_struct2);
 
     var task = try Task.init(alloc);
     defer task.deinit(alloc);
+    var task2 = try Task.init(alloc);
+    defer task2.deinit(alloc);
+    std.Thread.sleep(10e6);
+    for (0..10) |i| {
+        ex_struct.* = ExampleStruct{
+            .age = 90,
+            .name = "peter kunz",
+            .timer = Timer.start() catch unreachable,
+        };
+        task.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_type_erased);
+        ps.push_task(0, 0, task) catch {
+            std.log.warn("pushing task 1 in iteration {} failed", .{i});
+        };
 
-    task.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_type_erased);
-
-    try ps.push_task(0, 0, task);
-
-    std.Thread.sleep(500e6);
-
-    defer {
-        ps.shutdown() catch unreachable;
-        ps.deinit(alloc);
+        ex_struct2.* = ExampleStruct{
+            .age = 90,
+            .name = "peter kunz",
+            .timer = Timer.start() catch unreachable,
+        };
+        // task2.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_lie_type_erased);
+        // ps.push_task(0, 0, task2) catch |e| {
+        //     std.log.warn("slot is occupied {}", .{e});
+        // };
+        task2.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_lie_type_erased);
+        ps.push_task(1, 0, task2) catch {
+            std.log.warn("pushing task 2 in iteration {} failed", .{i});
+        };
+        std.Thread.sleep(200e6);
     }
+
+    std.Thread.sleep(20e6);
+
+    ps.shutdown() catch unreachable;
+    ps.deinit(alloc);
 }

@@ -43,7 +43,10 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
     return struct {
         const This = @This();
         pub const InitReturnType = ThreadT.InitReturnType;
-        const ThreadTConfig = wthread.WThreadConfig.init(T_wrapper);
+        const ThreadTConfig = wthread.WThreadConfig{
+            .T_stack_type = T_wrapper,
+            .debug_name = "Delegator",
+        };
         const ThreadT = wthread.WThread(ThreadTConfig);
         thread: ThreadT.InitReturnType,
         const T_wrapper = struct {
@@ -66,7 +69,7 @@ pub fn DelegatorThread(D: type, T: type, DServerChannel: type) type {
             // std.log.debug("\nwoke up will proces now", .{});
             var chan = inst.channel;
             var instance = inst.instance;
-            while (th.is_running()) {
+            while (th.should_run()) {
                 while (chan.receive()) |msg| {
                     const ret = D.__message_handler(&instance, msg);
                     try chan.send(ret);
