@@ -15,11 +15,15 @@ pub fn build(b: *std.Build) !void {
 
     const opts = .{ .target = target, .optimize = optimize };
     const zbench_module = b.dependency("zbench", opts).module("zbench");
-    const ziggen = b.dependency("ziggen", .{
+    _ = zbench_module;
+    const ziggen_dep = b.dependency("ziggen", .{
         .target = target,
         .optimize = std.builtin.OptimizeMode.ReleaseFast,
     });
-    const ziggen_module = ziggen.module("ziggen");
+    const mpmc_dep = b.dependency("mpmc", opts);
+    const mpmc_module = mpmc_dep.module("mpmc");
+
+    const ziggen_module = ziggen_dep.module("ziggen");
     // make library module
     const fifoasync_module = b.addModule("fifoasync", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -27,6 +31,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
     });
     fifoasync_module.addImport("ziggen", ziggen_module);
+    fifoasync_module.addImport("mpmc", mpmc_module);
 
     const struct_mod = b.addModule("examplestruct", .{ .root_source_file = b.path("test/some_struct.zig") });
     const src_generator = b.addExecutable(.{
@@ -35,6 +40,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = .Debug,
     });
+
     src_generator.root_module.addImport("fifoasync", fifoasync_module);
     src_generator.root_module.addImport("examplestruct", struct_mod);
     const src_generator_run = b.addRunArtifact(src_generator);
@@ -62,12 +68,13 @@ pub fn build(b: *std.Build) !void {
     }
     run_step.dependOn(&run_cmd.step);
 
-    const lib_test = b.addTest(.{
-        .root_source_file = b.path("src/lib.zig"),
+    const fifoasync_test = b.addTest(.{
+        .root_module = fifoasync_module,
+        // .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
-    lib_test.root_module.addImport("zbench", zbench_module);
-    const lib_test_run = b.addRunArtifact(lib_test);
+    // lib_test.root_module.addImport("zbench", zbench_module);
+    const lib_test_run = b.addRunArtifact(fifoasync_test);
     test_step.dependOn(&lib_test_run.step);
 }

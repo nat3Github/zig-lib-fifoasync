@@ -120,6 +120,12 @@ pub fn WThreadHandle(cfg: WThreadHandleConfig) type {
         pub fn has_terminated(self: *const This) bool {
             return self.stop_signal.is_stopped();
         }
+        pub fn set_stop_signal(self: *This) void {
+            // note we only can stopp the thread if its started (thread function may run some cleanup logic thats get skipped otherwise)
+            if (self.stop_signal.is_stopped()) return;
+            if (self.stop_signal.is_stop_signal()) return;
+            self.stop_signal.set_stopp_signal();
+        }
 
         pub fn stop_or_timeout(self: *This, time_out_ns: u64) !void {
             // note we only can stopp the thread if its started (thread function may run some cleanup logic thats get skipped otherwise)
