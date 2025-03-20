@@ -107,10 +107,10 @@ fn wthread_handle_owned(alloc: Allocator) !WthreadHandleOwned {
 pub fn WThreadHandle(cfg: WThreadHandleConfig) type {
     return struct {
         const This = @This();
-        stop_signal: StopSignal,
         stop_event: *ResetEvent,
         thread_sets_handle_waits: *ResetEvent,
         handle_sets_thread_waits: *ResetEvent,
+        stop_signal: StopSignal,
         pub fn spinwait_for_startup(self: *const This) void {
             assert(!self.stop_signal.is_stop_signal());
             assert(!self.stop_signal.is_stopped());
