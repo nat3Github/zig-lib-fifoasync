@@ -61,6 +61,7 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
             // self.front.store(f + n, AtomicOrder.release);
         }
         pub fn push(self: *Self, item: T) !void {
+
             const xitem: [1]T = .{item};
             try self.push_slice(&xitem);
         }

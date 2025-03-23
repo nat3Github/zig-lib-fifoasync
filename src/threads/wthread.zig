@@ -154,7 +154,7 @@ pub fn WThreadHandle(cfg: WThreadHandleConfig) type {
         /// if deinit is called before the thread is stopped segfaults will likely crash the programm
         pub fn deinit(self: *This, alloc: Allocator) void {
             // if this assertion is triggered call wait till stopped
-            std.debug.assert(self.has_terminated());
+            std.debug.assert(self.stop_event.isSet());
 
             self.stop_signal.deinit(alloc);
             alloc.destroy(self.stop_event);

@@ -126,8 +126,9 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
         tier_list: [N_tiers]*AtomicU32,
         wthandle: [N_threads]TWthread.InitReturnType,
         mpmc: [N_tiers]MPMC,
+        free_slot: AtomicU32,
 
-        pub fn init(alloc: Allocator) !This {
+        pub fn init_stack(alloc: Allocator) !This {
             var mpmc: [N_tiers]MPMC = undefined;
             for (&mpmc) |*j| j.* = try MPMC.init(alloc);
             var tier_list: [N_tiers]*AtomicU32 = undefined;
@@ -143,7 +144,14 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
                 .mpmc = mpmc,
                 .tier_list = tier_list,
                 .wthandle = wthandle,
+                .free_slot = AtomicU32.init(0),
             };
+        }
+        pub fn init(alloc: Allocator) !*This {
+            const t = try init_stack(alloc);
+            const p = try alloc.create(This);
+            p.* = t;
+            return p;
         }
         pub fn shutdown(self: *This) !void {
             for (&self.wthandle) |*j| j.spinwait_for_startup();
@@ -151,6 +159,10 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
             for (&self.wthandle) |*j| try j.stop_or_timeout(1e9);
         }
         pub fn deinit(self: *This, alloc: Allocator) void {
+            self.deinit_stack(alloc);
+            alloc.destroy(self);
+        }
+        pub fn deinit_stack(self: *This, alloc: Allocator) void {
             for (&self.mpmc) |*j| j.deinit(alloc);
             for (&self.tier_list) |j| alloc.destroy(j);
             for (&self.wthandle) |*j| j.deinit(alloc);
@@ -159,6 +171,10 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
         pub fn push_task(self: *This, slot: usize, tier: usize, task: *Task) !void {
             assert(tier < self.mpmc.len);
             try self.mpmc[tier].push(slot, task);
+        }
+        pub fn get_free_slot(self: *This) usize {
+            const x = self.free_slot.fetchAdd(1, .acq_rel);
+            return @intCast(x);
         }
     };
 }
@@ -203,13 +219,7 @@ const PrioSched = PrioritySchedular(.{
 });
 test "prio sched init test" {
     const alloc = std.testing.allocator;
-    // var ps = try PrioSched.init(alloc);
-    std.log.warn("size of PrioritySchedular:{}", .{@sizeOf(PrioritySchedular(.{
-        .order = 16,
-        .slot_count = 2048,
-        .thread_count = 8,
-        .tier_count = 3,
-    }))});
+    var ps = try PrioSched.init(alloc);
 
     const ex_struct = try alloc.create(ExampleStruct);
     defer alloc.destroy(ex_struct);
@@ -220,37 +230,37 @@ test "prio sched init test" {
     defer task.deinit(alloc);
     var task2 = try Task.init(alloc);
     defer task2.deinit(alloc);
-    // std.Thread.sleep(10e6);
+    std.Thread.sleep(10e6);
 
-    // for (0..10) |i| {
-    //     ex_struct.* = ExampleStruct{
-    //         .age = 90,
-    //         .name = "peter kunz",
-    //         .timer = Timer.start() catch unreachable,
-    //     };
-    //     task.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_type_erased);
-    //     ps.push_task(0, 0, task) catch {
-    //         std.log.warn("pushing task 1 in iteration {} failed", .{i});
-    //     };
+    for (0..10) |i| {
+        ex_struct.* = ExampleStruct{
+            .age = 90,
+            .name = "peter kunz",
+            .timer = Timer.start() catch unreachable,
+        };
+        task.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_type_erased);
+        ps.push_task(0, 0, task) catch {
+            std.log.warn("pushing task 1 in iteration {} failed", .{i});
+        };
 
-    //     ex_struct2.* = ExampleStruct{
-    //         .age = 90,
-    //         .name = "peter kunz",
-    //         .timer = Timer.start() catch unreachable,
-    //     };
-    //     // task2.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_lie_type_erased);
-    //     // ps.push_task(0, 0, task2) catch |e| {
-    //     //     std.log.warn("slot is occupied {}", .{e});
-    //     // };
-    //     task2.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_lie_type_erased);
-    //     ps.push_task(1, 0, task2) catch {
-    //         std.log.warn("pushing task 2 in iteration {} failed", .{i});
-    //     };
-    //     std.Thread.sleep(200e6);
-    // }
+        ex_struct2.* = ExampleStruct{
+            .age = 90,
+            .name = "peter kunz",
+            .timer = Timer.start() catch unreachable,
+        };
+        // task2.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_lie_type_erased);
+        // ps.push_task(0, 0, task2) catch |e| {
+        //     std.log.warn("slot is occupied {}", .{e});
+        // };
+        task2.set(ExampleStruct, ex_struct, ExampleStruct.say_my_name_lie_type_erased);
+        ps.push_task(1, 0, task2) catch {
+            std.log.warn("pushing task 2 in iteration {} failed", .{i});
+        };
+        std.Thread.sleep(200e6);
+    }
 
-    // std.Thread.sleep(20e6);
+    std.Thread.sleep(20e6);
 
-    // ps.shutdown() catch unreachable;
-    // ps.deinit(alloc);
+    ps.shutdown() catch unreachable;
+    ps.deinit(alloc);
 }
