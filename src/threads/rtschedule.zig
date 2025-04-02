@@ -177,12 +177,13 @@ test "test schedule wake" {
         i += 1;
     }
     try sw.stop_or_timeout(std.math.maxInt(u64));
-    stats.basic_stats(mes_arr[0..]);
+    // stats.basic_stats(mes_arr[0..]);
     sw.deinit(alloc);
 }
 const stats = root.stats;
 
-test "how fast is Timer.read()?" {
+test "how fast is Timer.read()?" {}
+fn how_fast_is_timer_read() !void {
     const N_measurement = 1024;
     var mes_arr: [N_measurement]u64 = undefined;
 
@@ -190,6 +191,7 @@ test "how fast is Timer.read()?" {
     var timer2 = try Timer.start();
     for (0..N_measurement) |i| {
         timer.reset();
+        timer2.reset();
         const real_time = timer.read();
         mes_arr[i] = real_time;
     }
@@ -197,8 +199,8 @@ test "how fast is Timer.read()?" {
     const timef = stats.ns_to_ms_f64(time);
     const fmt =
         \\ how fast is timer.read()?
-        \\ in time {d:.3} ms
-        \\ that means avg = {d:.3} micro s
+        \\ time total {d:.3} ms
+        \\ that means avg per call {d:.3} micro s
         \\
     ;
     std.debug.print(fmt, .{ timef, 1000 * (timef / mes_arr.len) });
@@ -211,13 +213,6 @@ fn benchmark_time_read(alloc: Allocator) void {
 }
 
 const zbench = @import("zbench");
-
-test "how fast is Timer.read()? 2" {
-    // var bench = zbench.Benchmark.init(std.testing.allocator, .{});
-    // defer bench.deinit();
-    // try bench.add("how fast is timer.read()", benchmark_time_read, .{});
-    // try bench.run(std.io.getStdOut().writer());
-}
 
 test "test all refs" {
     std.testing.refAllDeclsRecursive(@This());

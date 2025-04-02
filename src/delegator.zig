@@ -246,8 +246,8 @@ fn SoundEngineRemote(Server: type) type {
 const DummyServer = struct {
     const Self = @This();
     pub fn send(self: *Self, x: SoundEngineParamUnion) void {
-        std.debug.print("{any}\n", .{x});
-        _ = self;
+        // std.debug.print("{any}\n", .{x});
+        _ = .{ self, x };
     }
     pub fn xtest(x: f32, self1: *Self, self2: *Self) void {
         _ = self1;
@@ -263,7 +263,8 @@ test "test remote" {
     remote.releaseGase();
     remote.make_brum_brum(666);
     const srt = SoundEngineReturnUnion{ .releaseGas = SoundEngine.releaseGas() };
-    std.debug.print("{any}\n", .{srt});
+    _ = srt;
+    // std.debug.print("{any}\n", .{srt});
 }
 test "test all" {
     std.testing.refAllDeclsRecursive(@This());

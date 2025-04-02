@@ -256,6 +256,6 @@ pub fn DelegatorServer(config: DelegatorServerConfig) type {
 }
 
 test "test all refs" {
-    std.debug.print("\ndelegatar.zig semantic test", .{});
+    // std.debug.print("\ndelegatar.zig semantic test", .{});
     std.testing.refAllDeclsRecursive(@This());
 }

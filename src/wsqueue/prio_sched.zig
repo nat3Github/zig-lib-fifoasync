@@ -22,8 +22,7 @@
 /// if the system is overloaded lower TIER tasks could starve
 ///
 ///
-/// TODO: define how a Task looks like
-///
+pub const ASNode = @import("aswrapper.zig").ASNode;
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const root = @import("../lib.zig");
@@ -153,6 +152,9 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
             p.* = t;
             return p;
         }
+        pub fn spinwait_for_startup(self: *This) !void {
+            for (&self.wthandle) |*j| j.spinwait_for_startup();
+        }
         pub fn shutdown(self: *This) !void {
             for (&self.wthandle) |*j| j.spinwait_for_startup();
             for (&self.wthandle) |*j| j.set_stop_signal();
@@ -189,12 +191,12 @@ const ExampleStruct = struct {
     timer: Timer,
     pub fn say_my_name(self: *This) void {
         self.time();
-        std.log.warn("my name is {s} and my age is {}", .{ self.name, self.age });
+        // std.log.warn("my name is {s} and my age is {}", .{ self.name, self.age });
     }
     pub fn say_my_name_lie(self: *This) void {
         self.time();
         self.age -= 10;
-        std.log.warn("my name is peter schmutzig and my age is {}", .{self.age});
+        // std.log.warn("my name is peter schmutzig and my age is {}", .{self.age});
     }
     pub fn say_my_name_type_erased(any_self: *anyopaque) void {
         const self = recast(This, any_self);
@@ -203,7 +205,8 @@ const ExampleStruct = struct {
     fn time(self: *This) void {
         const t = self.timer.read();
         const t_f: f64 = @floatFromInt(t);
-        std.log.warn("elapsed: {d:.3} ms", .{t_f / 1e6});
+        _ = t_f;
+        // std.log.warn("elapsed: {d:.3} ms", .{t_f / 1e6});
     }
 
     pub fn say_my_name_lie_type_erased(any_self: *anyopaque) void {
@@ -263,4 +266,8 @@ test "prio sched init test" {
 
     ps.shutdown() catch unreachable;
     ps.deinit(alloc);
+}
+
+test "test all refs" {
+    std.testing.refAllDecls(@This());
 }

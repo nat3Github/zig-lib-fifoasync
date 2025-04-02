@@ -183,7 +183,7 @@ pub fn WThread(cfg: WThreadConfig) type {
             xthread.stop_signal.inner.store(StopSignal.THREAD_STARTED, .release);
             fx(inst, xthread) catch |e| std.log.err("{s}: {}", .{ cfg.debug_name, e });
             xthread.stop_signal.inner.store(StopSignal.THREAD_STOPPED, .release);
-            std.log.warn("{s} Thread is terminating...", .{cfg.debug_name});
+            std.log.info("{s} Thread is terminating...", .{cfg.debug_name});
             stop_event.set();
         }
         /// NOTE: sched_handle must be valid for the lifetime of WTthread!
@@ -226,10 +226,10 @@ test "test wthread" {
     const T = WThread(cfg);
     const S = struct {
         fn f(s: VoidType, thread: T.ArgumentType) !void {
-            std.log.warn("\n thread started (good)", .{});
+            // std.log.warn("\n thread started (good)", .{});
             while (thread.should_run()) {}
             _ = s;
-            std.log.warn("\n thread Exited (good)", .{});
+            // std.log.warn("\n thread Exited (good)", .{});
         }
     };
     var sv = try T.init(
