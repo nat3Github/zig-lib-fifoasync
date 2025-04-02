@@ -6,11 +6,11 @@ const Timer = std.time.Timer;
 const assert = std.debug.assert;
 const expect = std.testing.expect;
 
-// const rtsp = root.threads.rtschedule;
 const Atomic = std.atomic.Value;
 const AtomicOrder = std.builtin.AtomicOrder;
 const AtomicU8 = Atomic(u8);
 const AtomicU32 = Atomic(u32);
+const AtomicBool = Atomic(bool);
 const ResetEvent = std.Thread.ResetEvent;
 
 const ExStruct = struct {
@@ -67,7 +67,7 @@ const FnTypeInfo = struct {
     fn_type_info: Type.Fn,
 };
 
-fn pub_fn_types(T: type) [pub_fn_num(T)]FnTypeInfo {
+fn pub_fn_type_info(T: type) [pub_fn_num(T)]FnTypeInfo {
     comptime var i: usize = 0;
     var fn_types: [pub_fn_num(T)]FnTypeInfo = undefined;
     switch (@typeInfo(T)) {
@@ -122,7 +122,7 @@ fn pub_fn_types(T: type) [pub_fn_num(T)]FnTypeInfo {
 }
 
 fn enum_from_pub_fn_decl(comptime T: type) type {
-    const fns = pub_fn_types(T);
+    const fns = pub_fn_type_info(T);
     var fields: [fns.len]Type.EnumField = undefined;
     inline for (&fields, &fns, 0..) |*field, x, i| {
         field.* = Type.EnumField{
@@ -181,8 +181,8 @@ fn arg_tuple_from_fn_typeinfo(comptime Fn: Type.Fn) type {
     } });
 }
 
-fn tagged_union_from_pub_fn(comptime T: type) type {
-    const fns = pub_fn_types(T);
+fn tagged_arg_union_from_pub_fn(comptime T: type) type {
+    const fns = pub_fn_type_info(T);
     var fields: [fns.len]Type.UnionField = undefined;
     inline for (&fields, &fns) |*field, x| {
         field.* = Type.UnionField{
@@ -202,19 +202,25 @@ fn tagged_union_from_pub_fn(comptime T: type) type {
     });
 }
 
-test "make union" {
-    const funion = tagged_union_from_pub_fn(ExStruct);
-    const x: funion = .{ .extra = .{ 0, 0 } };
-    switch (x) {
-        .doosomething => {
-            std.log.warn("doosomtehing", .{});
+fn tagged_return_union_from_pub_fn(comptime T: type) type {
+    const fns = pub_fn_type_info(T);
+    var fields: [fns.len]Type.UnionField = undefined;
+    inline for (&fields, &fns) |*field, x| {
+        field.* = Type.UnionField{
+            .alignment = 0,
+            .name = x.decl.name,
+            .type = x.fn_type_info.return_type.?,
+        };
+    }
+    const decls: []const Type.Declaration = &.{};
+    return @Type(Type{
+        .@"union" = Type.Union{
+            .tag_type = enum_from_pub_fn_decl(T),
+            .layout = .auto,
+            .fields = &fields,
+            .decls = decls,
         },
-        else => {},
-    }
-    const fields = @typeInfo(funion).@"union".fields;
-    inline for (fields) |f| {
-        std.log.warn("name {s} type: {}", .{ f.name, f.type });
-    }
+    });
 }
 
 fn tagged_enum_from_struct_pub_fn(comptime T: type) type {
@@ -246,36 +252,33 @@ fn tagged_enum_from_struct_pub_fn(comptime T: type) type {
         },
     });
 }
-test "make tagged fn enum" {
-    // const FuncEnum = enum_from_struct_pub_fn(ExStruct);
-    // const x: FuncEnum = .doosomething2;
-    // switch (x) {
-    //     .doosomething => {
-    //         std.log.warn("doosomtehing", .{});
-    //     },
-    //     else => {},
-    // }
-    // const fields = @typeInfo(FuncEnum).@"enum".fields;
-    // inline for (fields) |f| {
-    //     std.log.warn("name {s} val: {}", .{ f.name, f.value });
-    // }
-}
 
 const ASWrapperConfig = struct {
     wrapped_t: type,
 };
 
+/// wraps T for async calling via comptime generated tagged unions from pub fn of T
+/// fn set_fn sets the fn with given arguments
+/// some backend can use the *Task or process_fn() to execute
+/// result can be checked by is_result_ready()
+/// result can be gathered by result()
 const Task = root.prioque.Task;
 pub fn ASNode(wrapped_t: type) type {
     return struct {
         const This = @This();
         // const wrapped_t = cfg.wrapped_t;
+        // const FnTable = fn_table_from_pub_fn(wrapped_t);
+        const FnInfoOfT = pub_fn_type_info(wrapped_t);
         const FnEnum = enum_from_pub_fn_decl(wrapped_t);
-        const FnArg = tagged_union_from_pub_fn(wrapped_t);
+        const FnArg = tagged_arg_union_from_pub_fn(wrapped_t);
+        const FnRet = tagged_return_union_from_pub_fn(wrapped_t);
+
         t: wrapped_t,
         mutex: std.Thread.Mutex = std.Thread.Mutex{},
         task: *Task,
         fnarg: FnArg = undefined,
+        fnret: FnRet = undefined,
+        blocked: AtomicBool = AtomicBool.init(false),
 
         pub fn init(alloc: Allocator, t: wrapped_t) !*This {
             const this = try alloc.create(This);
@@ -288,28 +291,68 @@ pub fn ASNode(wrapped_t: type) type {
             task.set(This, this, anyopaque_process);
             return this;
         }
+
         pub fn set_fn(self: *This, function: FnArg) !void {
             if (self.mutex.tryLock()) {
                 self.fnarg = function;
+                self.blocked.store(true, .release);
                 self.mutex.unlock();
             } else return error.NodeWasLocked;
+        }
+
+        pub fn is_result_ready(self: *This) bool {
+            if (self.blocked.load(.acquire)) return false;
+            if (self.mutex.tryLock()) {
+                self.mutex.unlock();
+                return true;
+            } else return false;
+        }
+        /// panics if function tag is different from set_fn
+        /// panics if not ready
+        /// the result can be gathered till the set_fn call
+        pub fn result(self: *This, comptime function: FnEnum) FnInfoOfT[@intFromEnum(function)].fn_type_info.return_type.? {
+            if (self.blocked.load(.acquire)) unreachable;
+            if (self.mutex.tryLock()) {
+                const tag_idx = @intFromEnum(function);
+                switch (tag_idx) {
+                    inline 0...FnInfoOfT.len - 1 => |idx| {
+                        const en: FnEnum = @enumFromInt(idx);
+                        const ret = @field(self.fnret, @tagName(en));
+                        self.mutex.unlock();
+                        return ret;
+                    },
+                    else => unreachable,
+                }
+            } else unreachable;
         }
 
         pub fn deinit(self: *This, alloc: Allocator) void {
             self.task.deinit(alloc);
             alloc.destroy(self);
         }
-
-        pub fn anyopaque_process(p: *anyopaque) void {
-            const self: *This = @alignCast(@ptrCast(p));
+        pub fn process_fn(self: *This) void {
             if (self.mutex.tryLock()) {
                 const args: FnArg = self.fnarg;
-                const tagname = @tagName(args);
-                const arg = @field(args, tagname);
-                const f = @field(wrapped_t, tagname);
-                @call(.auto, f, arg);
+                const tag_idx = @intFromEnum(args);
+                switch (tag_idx) {
+                    inline 0...FnInfoOfT.len - 1 => |idx| {
+                        const en: FnEnum = @enumFromInt(idx);
+                        const arg = @field(args, @tagName(en));
+                        const decl = FnInfoOfT[idx].decl.name;
+                        const f = @field(wrapped_t, decl);
+                        const ret = @call(.auto, f, arg);
+                        const ret_union = @unionInit(FnRet, @tagName(en), ret);
+                        self.fnret = ret_union;
+                        self.blocked.store(false, .release);
+                    },
+                    else => unreachable,
+                }
                 self.mutex.unlock();
             } else @panic("mutex of asnode was locked");
+        }
+        pub fn anyopaque_process(p: *anyopaque) void {
+            const self: *This = @alignCast(@ptrCast(p));
+            self.process_fn();
         }
     };
 }
@@ -319,5 +362,13 @@ test "test asnode" {
     const ExAsNode = ASNode(ExStruct);
     const wrapped = ExStruct{};
     var asn = try ExAsNode.init(alloc, wrapped);
-    asn.set_fn(.{ .extra = .{ 0, 1 } });
+    defer asn.deinit(alloc);
+    asn.set_fn(.{ .extra = .{ 0, 1 } }) catch unreachable;
+    try expect(asn.is_result_ready() == false);
+    ExAsNode.anyopaque_process(@ptrCast(asn));
+    try expect(asn.is_result_ready() == true);
+    const res = asn.result(.extra);
+    if (res) |r| {
+        std.log.warn("{}", .{r});
+    } else |e| return e;
 }
