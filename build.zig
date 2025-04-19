@@ -14,8 +14,7 @@ pub fn build(b: *std.Build) !void {
     const run_step = b.step("run", "Run the app");
 
     const opts = .{ .target = target, .optimize = optimize };
-    const zbench_module = b.dependency("zbench", opts).module("zbench");
-    _ = zbench_module;
+
     const ziggen_dep = b.dependency("ziggen", .{
         .target = target,
         .optimize = std.builtin.OptimizeMode.ReleaseFast,
