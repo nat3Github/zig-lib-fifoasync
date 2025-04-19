@@ -14,16 +14,24 @@ const AtomicBool = Atomic(bool);
 const ResetEvent = std.Thread.ResetEvent;
 
 const ExStruct = struct {
+    arg1: u32 = 0,
     const This = @This();
     pub fn doosomething(self: *This) u32 {
-        _ = .{self};
-        return 0;
+        std.log.debug("doosomething called: self.arg1 = {}", .{self.arg1});
+        return self.arg1;
     }
+
     pub fn doosomething2(self: *This, arg1: u32, arg2: u8) !void {
-        _ = .{ self, arg1, arg2 };
+        std.log.debug("doosomething 2 called with {}:{}, {}:{}", .{
+            arg1,
+            @TypeOf(arg1),
+            arg2,
+            @TypeOf(arg2),
+        });
+        self.arg1 = arg1;
     }
     pub fn extra(arg1: u32, arg2: u8) !void {
-        std.log.warn("fn extra called with {}:{}, {}:{}", .{
+        std.log.debug("fn extra called with {}:{}, {}:{}", .{
             arg1,
             @TypeOf(arg1),
             arg2,
@@ -140,7 +148,30 @@ fn enum_from_pub_fn_decl(comptime T: type) type {
         },
     });
 }
-fn arg_tuple_from_fn_typeinfo_without_first_param(comptime Fn: Type.Fn) type {
+fn first_arg_is_self_referential(self_t: type, comptime Fn: Type.Fn) bool {
+    if (Fn.params.len == 0) return false;
+    const t = switch (@typeInfo(self_t)) {
+        .@"struct", .@"enum", .@"union" => self_t,
+        .pointer => |p| p.child,
+        else => @compileError("T is neither struct, enum, union"),
+    };
+    switch (@typeInfo(t)) {
+        .@"struct", .@"enum", .@"union" => {},
+        else => @compileError("T is neither struct, enum, union"),
+    }
+    const first_arg = Fn.params[0].type orelse return false;
+    switch (@typeInfo(first_arg)) {
+        .pointer => |ptr| {
+            if (ptr.child == t) {
+                return true;
+            }
+        },
+        else => {},
+    }
+    return false;
+}
+
+fn arg_tuple_from_fn_typeinfo_skip_first(comptime Fn: Type.Fn) type {
     if (Fn.params.len == 0) return arg_tuple_from_fn_typeinfo(Fn);
     var fields: [Fn.params.len - 1]Type.StructField = undefined;
     const params = Fn.params[1..];
@@ -188,7 +219,10 @@ fn tagged_arg_union_from_pub_fn(comptime T: type) type {
         field.* = Type.UnionField{
             .alignment = 0,
             .name = x.decl.name,
-            .type = arg_tuple_from_fn_typeinfo(x.fn_type_info),
+            .type = switch (first_arg_is_self_referential(T, x.fn_type_info)) {
+                true => arg_tuple_from_fn_typeinfo_skip_first(x.fn_type_info),
+                false => arg_tuple_from_fn_typeinfo(x.fn_type_info),
+            },
         };
     }
     const decls: []const Type.Declaration = &.{};
@@ -293,15 +327,20 @@ pub fn ASNode(wrapped_t: type) type {
         }
 
         pub fn set_fn(self: *This, function: FnArg) !void {
+            if (self.blocked.load(.acquire)) return error.NodeLocked;
             if (self.mutex.tryLock()) {
                 self.fnarg = function;
                 self.blocked.store(true, .release);
                 self.mutex.unlock();
-            } else return error.NodeWasLocked;
+            } else return error.NodeLocked;
         }
 
-        pub fn is_result_ready(self: *This) bool {
-            if (self.blocked.load(.acquire)) return false;
+        pub fn is_blocked(self: *This) bool {
+            return (self.blocked.load(.acquire));
+        }
+
+        pub fn result_ready(self: *This) bool {
+            if (self.is_blocked()) return false;
             if (self.mutex.tryLock()) {
                 self.mutex.unlock();
                 return true;
@@ -332,22 +371,27 @@ pub fn ASNode(wrapped_t: type) type {
         }
         pub fn process_fn(self: *This) void {
             if (self.mutex.tryLock()) {
-                const args: FnArg = self.fnarg;
-                const tag_idx = @intFromEnum(args);
+                const fnArgs: FnArg = self.fnarg;
+                const tag_idx = @intFromEnum(fnArgs);
                 switch (tag_idx) {
                     inline 0...FnInfoOfT.len - 1 => |idx| {
                         const en: FnEnum = @enumFromInt(idx);
-                        const arg = @field(args, @tagName(en));
-                        const decl = FnInfoOfT[idx].decl.name;
+                        const arg = @field(fnArgs, @tagName(en));
+                        const fnInfo = FnInfoOfT[idx];
+                        const decl = fnInfo.decl.name;
                         const f = @field(wrapped_t, decl);
-                        const ret = @call(.auto, f, arg);
+                        _ = .{ arg, f };
+                        const ret = switch (comptime first_arg_is_self_referential(wrapped_t, fnInfo.fn_type_info)) {
+                            true => @call(.auto, f, .{&self.t} ++ arg),
+                            false => @call(.auto, f, arg),
+                        };
                         const ret_union = @unionInit(FnRet, @tagName(en), ret);
                         self.fnret = ret_union;
+                        self.mutex.unlock();
                         self.blocked.store(false, .release);
                     },
                     else => unreachable,
                 }
-                self.mutex.unlock();
             } else @panic("mutex of asnode was locked");
         }
         pub fn anyopaque_process(p: *anyopaque) void {
@@ -357,6 +401,23 @@ pub fn ASNode(wrapped_t: type) type {
     };
 }
 
+test "test self ref fn" {
+    // const ExAsNode = ASNode(ExStruct);
+    // const un = @typeInfo(ExAsNode.FnArg).@"union";
+    // const str = @typeInfo(ExStruct).@"struct";
+    // inline for (str.decls) |f| {
+    //     std.log.warn("decl name: {s}", .{f.name});
+    //     const fnx = @typeInfo(@TypeOf(@field(ExStruct, f.name))).@"fn";
+    //     switch (first_arg_is_self_referential(ExStruct, fnx)) {
+    //         true => std.log.warn("is self referential", .{}),
+    //         false => std.log.warn("is pure", .{}),
+    //     }
+    // }
+    // inline for (un.fields) |f| {
+    //     std.log.warn("field name: {s}", .{f.name});
+    //     std.log.warn("field type: {}", .{f.type});
+    // }
+}
 test "test asnode" {
     const alloc = std.testing.allocator;
     const ExAsNode = ASNode(ExStruct);
@@ -364,11 +425,19 @@ test "test asnode" {
     var asn = try ExAsNode.init(alloc, wrapped);
     defer asn.deinit(alloc);
     asn.set_fn(.{ .extra = .{ 0, 1 } }) catch unreachable;
-    try expect(asn.is_result_ready() == false);
+    try expect(asn.result_ready() == false);
     ExAsNode.anyopaque_process(@ptrCast(asn));
-    try expect(asn.is_result_ready() == true);
+    try expect(asn.result_ready() == true);
     const res = asn.result(.extra);
-    if (res) |r| {
-        std.log.warn("{}", .{r});
-    } else |e| return e;
+    if (res) |_| {} else |e| return e;
+
+    const first_arg = 42;
+    asn.set_fn(.{ .doosomething2 = .{ first_arg, 7 } }) catch unreachable;
+    ExAsNode.anyopaque_process(@ptrCast(asn));
+    try expect(asn.result_ready() == true);
+
+    asn.set_fn(.{ .doosomething = .{} }) catch unreachable;
+    ExAsNode.anyopaque_process(@ptrCast(asn));
+    try expect(asn.result_ready() == true);
+    try expect(asn.result(.doosomething) == first_arg);
 }

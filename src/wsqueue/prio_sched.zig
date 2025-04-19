@@ -42,7 +42,7 @@ const ResetEvent = std.Thread.ResetEvent;
 const fifoasync = @import("fifoasync");
 const lib_mpmc = @import("mpmc");
 
-const PrioritySchedularConfig = struct {
+const GeneralPurposeSchedularConfig = struct {
     order: usize = 16,
     slot_count: usize = 2048,
     tier_count: usize = 3,
@@ -81,7 +81,7 @@ pub const Task = struct {
 ///  -> do tasks dependent on there due date
 ///
 ///
-pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
+pub fn PrioritySchedular(cfg: GeneralPurposeSchedularConfig) type {
     const N_threads: usize = cfg.thread_count;
     const N_tiers: usize = cfg.tier_count;
     if (N_threads >= std.math.maxInt(u32)) @compileError("way to many threads");
@@ -89,12 +89,12 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
     return struct {
         const This = @This();
         const MPMC = lib_mpmc.MPMC_SQC(.{ .order = cfg.order, .slot_count = cfg.slot_count, .T = Task });
-        const TWthread = WThread(.{ .debug_name = "prio sched", .T_stack_type = TaskThread });
-        const TaskThread = struct {
+        const TWthread = WThread(.{ .debug_name = "prio sched", .T_stack_type = RealtimeTaskThread });
+        const RealtimeTaskThread = struct {
             mpmc: [N_tiers]MPMC,
             tier_list: [N_tiers]*AtomicU32,
             tier: usize = 0,
-            fn f(Self: TaskThread, thread: TWthread.ArgumentType) !void {
+            fn f(Self: RealtimeTaskThread, thread: TWthread.ArgumentType) !void {
                 var self = @constCast(&Self);
                 var t = try Timer.start();
                 while (true) {
@@ -114,7 +114,7 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
                     if (!thread.should_run()) break;
                 }
             }
-            fn switch_to_tier(self: *TaskThread, tier: usize) void {
+            fn switch_to_tier(self: *RealtimeTaskThread, tier: usize) void {
                 assert(tier >= 0 and tier < N_tiers);
                 if (self.tier == tier) return;
                 _ = self.tier_list[self.tier].fetchSub(1, .acq_rel);
@@ -135,10 +135,10 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
             tier_list[0].* = AtomicU32.init(N_threads); // all threads start on tier 0
             for (tier_list[1..]) |j| j.* = AtomicU32.init(0);
             var wthandle: [N_threads]TWthread.InitReturnType = undefined;
-            for (&wthandle) |*j| j.* = try TWthread.init(alloc, TaskThread{
+            for (&wthandle) |*j| j.* = try TWthread.init(alloc, RealtimeTaskThread{
                 .mpmc = mpmc,
                 .tier_list = tier_list,
-            }, TaskThread.f);
+            }, RealtimeTaskThread.f);
             return This{
                 .mpmc = mpmc,
                 .tier_list = tier_list,
@@ -178,8 +178,148 @@ pub fn PrioritySchedular(cfg: PrioritySchedularConfig) type {
             const x = self.free_slot.fetchAdd(1, .acq_rel);
             return @intCast(x);
         }
+        pub fn get_async_executor(self: *This, tier_index: usize, slot: usize) AsyncExecutor {
+            if (tier_index >= cfg.tier_count) @panic("given tier index out of bounds for given PrioritySchedularConfig");
+            return AsyncExecutor{
+                .sched = self,
+                .tier = tier_index,
+                .slot = slot,
+            };
+        }
+        pub const AsyncExecutor = struct {
+            sched: *This,
+            slot: usize,
+            tier: usize,
+            pub fn exe(self: AsyncExecutor, task: *Task) void {
+                self.sched.push_task(
+                    self.slot,
+                    self.tier,
+                    task,
+                ) catch unreachable;
+            }
+        };
     };
 }
+const PrioritySchedularConfig = struct {
+    order: usize = 16,
+    slot_count: usize = 2048,
+    thread_count: usize = 8,
+};
+
+pub fn GeneralPurposeSchedular(cfg: GeneralPurposeSchedularConfig) type {
+    const N_threads: usize = cfg.thread_count;
+    if (N_threads >= std.math.maxInt(u32)) @compileError("way to many threads");
+    if (N_threads == 0) @compileError("wrong config values");
+    return struct {
+        const This = @This();
+        const MPMC = lib_mpmc.MPMC_SQC(.{ .order = cfg.order, .slot_count = cfg.slot_count, .T = Task });
+        const TWthread = WThread(.{ .debug_name = "prio sched", .T_stack_type = TaskThread });
+        const TaskThread = struct {
+            mpmc: MPMC,
+            reset_event: *ResetEvent,
+            wakeup_next: ?*ResetEvent,
+            fn f(Self: TaskThread, thread: TWthread.ArgumentType) !void {
+                var self = @constCast(&Self);
+                var nothing_count: u8 = 0;
+                while (true) {
+                    if (!thread.should_run()) break;
+                    if (nothing_count >= 16) {
+                        nothing_count = 0;
+                        self.reset_event.wait();
+                        self.reset_event.reset();
+                        if (self.wakeup_next) |wn| {
+                            wn.set();
+                        }
+                    }
+                    if (!thread.should_run()) break;
+                    var queue = self.mpmc;
+                    const popped = queue.pop();
+                    if (popped) |task| {
+                        task.call();
+                        nothing_count = 0;
+                    } else nothing_count += 1;
+                }
+            }
+        };
+        wthandle: [N_threads]TWthread.InitReturnType,
+        mpmc: MPMC,
+        free_slot: AtomicU32,
+        re_ptr: [N_threads]*ResetEvent,
+
+        pub fn init_stack(alloc: Allocator) !This {
+            const mpmc = try MPMC.init(alloc);
+            var re_ev: [N_threads]*ResetEvent = undefined;
+            var wthandle: [N_threads]TWthread.InitReturnType = undefined;
+            for (&re_ev) |*re| re.* = try alloc.create(ResetEvent);
+            for (&re_ev) |re| re.* = ResetEvent{};
+            for (&wthandle, 0..) |*j, i| {
+                const wake_next = if (i + 1 < N_threads) re_ev[i + 1] else null;
+                j.* = try TWthread.init(alloc, TaskThread{
+                    .mpmc = mpmc,
+                    .reset_event = re_ev[i],
+                    .wakeup_next = wake_next,
+                }, TaskThread.f);
+            }
+            return This{
+                .mpmc = mpmc,
+                .wthandle = wthandle,
+                .free_slot = AtomicU32.init(0),
+                .re_ptr = re_ev,
+            };
+        }
+        pub fn deinit_stack(self: *This, alloc: Allocator) void {
+            self.mpmc.deinit(alloc);
+            for (&self.re_ptr) |re| alloc.destroy(re);
+            for (&self.wthandle) |*j| j.deinit(alloc);
+        }
+        pub fn init(alloc: Allocator) !*This {
+            const t = try init_stack(alloc);
+            const p = try alloc.create(This);
+            p.* = t;
+            return p;
+        }
+        pub fn spinwait_for_startup(self: *This) !void {
+            for (&self.wthandle) |*j| j.spinwait_for_startup();
+        }
+        pub fn shutdown(self: *This) !void {
+            for (&self.wthandle) |*j| j.spinwait_for_startup();
+            for (&self.wthandle) |*j| j.set_stop_signal();
+            for (&self.re_ptr) |re| re.set();
+            for (&self.wthandle) |*j| try j.stop_or_timeout(1e9);
+        }
+        pub fn deinit(self: *This, alloc: Allocator) void {
+            self.deinit_stack(alloc);
+            alloc.destroy(self);
+        }
+        pub fn push_task(self: *This, slot: usize, task: *Task) !void {
+            try self.mpmc.push(slot, task);
+        }
+        pub fn get_free_slot(self: *This) usize {
+            const x = self.free_slot.fetchAdd(1, .acq_rel);
+            return @intCast(x);
+        }
+        pub fn get_async_executor(self: *This, slot: usize) AsyncExecutor {
+            return AsyncExecutor{
+                .sched = self,
+                .re_ptr = self.re_ptr[0],
+                .slot = slot,
+            };
+        }
+        pub const AsyncExecutor = struct {
+            sched: *This,
+            slot: usize,
+            re_ptr: *ResetEvent,
+            pub fn exe(self: AsyncExecutor, task: *Task) void {
+                self.sched.push_task(
+                    self.slot,
+                    task,
+                ) catch unreachable;
+                self.re_ptr.set();
+            }
+        };
+    };
+}
+
 pub fn recast(T: type, ptr: *anyopaque) *T {
     return @as(*T, @alignCast(@ptrCast(ptr)));
 }
@@ -263,6 +403,19 @@ test "prio sched init test" {
     }
 
     std.Thread.sleep(20e6);
+
+    ps.shutdown() catch unreachable;
+    ps.deinit(alloc);
+}
+const GpSched = GeneralPurposeSchedular(.{
+    .order = 16,
+    .slot_count = 2048,
+    .thread_count = 8,
+});
+
+test "gp prio sched init test" {
+    const alloc = std.testing.allocator;
+    var ps = try GpSched.init(alloc);
 
     ps.shutdown() catch unreachable;
     ps.deinit(alloc);

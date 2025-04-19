@@ -140,6 +140,7 @@ pub fn WThreadHandle(cfg: WThreadHandleConfig) type {
                 self.wakeup_waiting_thread();
                 const remaining_ns = std.math.sub(u64, time_out_ns, timer.read()) catch 0;
                 try self.stop_event.timedWait(remaining_ns);
+                assert(self.stop_event.isSet());
             }
         }
         pub fn wakeup_waiting_thread(self: *This) void {
@@ -154,8 +155,7 @@ pub fn WThreadHandle(cfg: WThreadHandleConfig) type {
         /// if deinit is called before the thread is stopped segfaults will likely crash the programm
         pub fn deinit(self: *This, alloc: Allocator) void {
             // if this assertion is triggered call wait till stopped
-            std.debug.assert(self.stop_event.isSet());
-
+            // std.debug.assert(self.stop_event.isSet());
             self.stop_signal.deinit(alloc);
             alloc.destroy(self.stop_event);
             if (cfg.owns_handle_sets_thread_waits) alloc.destroy(self.handle_sets_thread_waits);
