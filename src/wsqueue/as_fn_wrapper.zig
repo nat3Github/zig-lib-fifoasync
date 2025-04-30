@@ -120,7 +120,6 @@ test "test asnode" {
     ashello.call(.{ 12, 255 }, as1);
 
     std.Thread.sleep(200e6);
-
     std.Thread.sleep(20e6);
 
     ps.shutdown() catch unreachable;
