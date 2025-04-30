@@ -1,7 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const root = @import("../lib.zig");
-const WThread = root.threads.wthread.WThread;
 
 /// for safe use of from two threads (T is either available at the local thread or at the second thread)
 /// NOTE: when using a T which allocates you have to manually free that, this does not call deinit on T
