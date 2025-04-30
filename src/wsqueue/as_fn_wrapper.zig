@@ -99,7 +99,7 @@ pub fn ASFuture(Fn: anytype) type {
 test "test asnode" {
     const m = struct {
         pub fn hello_world(arg1: u32, arg2: u8) !void {
-            std.log.warn("hello world with {} : {}, {} : {}", .{
+            std.log.debug("hello world with {} : {}, {} : {}", .{
                 arg1,
                 @TypeOf(arg1),
                 arg2,
