@@ -40,7 +40,7 @@ pub fn ASFuture(Fn: anytype) type {
         const FnArg = arg_tuple_from_fn_typeinfo(@typeInfo(FnT).@"fn");
         const FnRet = @typeInfo(FnT).@"fn".return_type.?;
         const fnc: *const FnT = Fn;
-        mutex: std.Thread.Mutex = std.Thread.Mutex{},
+        // mutex: std.Thread.Mutex = std.Thread.Mutex{},
         task: Task = Task{},
         fnarg: FnArg = undefined,
         fnret: FnRet = undefined,
@@ -52,24 +52,21 @@ pub fn ASFuture(Fn: anytype) type {
             this.task.set(@This(), this, anyopaque_process);
             return this;
         }
-        pub fn set(self: *@This(), args: FnArg) void {
+        pub fn call(self: *@This(), args: FnArg, async_executor: anytype) !void {
+            if (self.blocked.load(.acquire)) @panic("result is still pending");
             self.fnarg = args;
+            self.blocked.store(true, .release);
+            switch (@typeInfo(@typeInfo(@TypeOf(@TypeOf(async_executor).exe)).@"fn".return_type.?)) {
+                .void => {
+                    return async_executor.exe(&self.task);
+                },
+                else => {
+                    return try async_executor.exe(&self.task);
+                },
+            }
         }
-        pub fn call(self: *@This(), args: FnArg, async_executor: anytype) void {
-            self.set(args);
-            async_executor.exe(&self.task);
-        }
-
-        pub fn is_blocked(self: *@This()) bool {
-            return (self.blocked.load(.acquire));
-        }
-
         pub fn result_ready(self: *@This()) bool {
-            if (self.is_blocked()) return false;
-            if (self.mutex.tryLock()) {
-                self.mutex.unlock();
-                return true;
-            } else return false;
+            return !self.blocked.load(.acquire);
         }
         pub fn result(self: *@This()) FnRet {
             if (self.blocked.load(.acquire)) unreachable;
@@ -83,11 +80,8 @@ pub fn ASFuture(Fn: anytype) type {
             alloc.destroy(self);
         }
         fn process_fn(self: *@This()) void {
-            if (self.mutex.tryLock()) {
-                self.fnret = @call(.auto, @This().fnc, self.fnarg);
-                self.mutex.unlock();
-                self.blocked.store(false, .release);
-            } else @panic("mutex of asnode was locked");
+            self.fnret = @call(.auto, @This().fnc, self.fnarg);
+            self.blocked.store(false, .release);
         }
         fn anyopaque_process(p: *anyopaque) void {
             const self: *@This() = @alignCast(@ptrCast(p));
@@ -117,7 +111,7 @@ test "test asnode" {
     const AShello_world = ASFuture(m.hello_world);
     const ashello = try AShello_world.init(alloc);
     defer ashello.deinit(alloc);
-    ashello.call(.{ 12, 255 }, as1);
+    try ashello.call(.{ 12, 255 }, as1);
 
     std.Thread.sleep(200e6);
     std.Thread.sleep(20e6);
