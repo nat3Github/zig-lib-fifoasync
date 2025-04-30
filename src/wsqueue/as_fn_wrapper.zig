@@ -10,7 +10,7 @@ const AtomicOrder = std.builtin.AtomicOrder;
 const AtomicBool = Atomic(bool);
 
 const Type = std.builtin.Type;
-const Task = root.sched.common.Task;
+const Task = root.sched.Task;
 
 fn arg_tuple_from_fn_typeinfo(comptime Fn: Type.Fn) type {
     var fields: [Fn.params.len]Type.StructField = undefined;

@@ -292,7 +292,7 @@ fn tagged_enum_from_struct_pub_fn(comptime T: type) type {
 /// some backend can use the *Task or process_fn() to execute
 /// result can be checked by is_result_ready()
 /// result can be gathered by result()
-const Task = root.sched.common.Task;
+const Task = root.sched.Task;
 pub fn ASNode(wrapped_t: type) type {
     return struct {
         const This = @This();

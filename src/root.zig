@@ -5,7 +5,10 @@ pub const mpmc = @import("mpmc");
 pub const thread = @import("threads/thread.zig");
 
 pub const sched = struct {
-    pub const common = @import("wsqueue/common.zig");
+    const common = @import("wsqueue/common.zig");
+    pub const ASNode = common.ASNode;
+    pub const ASFunction = common.ASFunction;
+    pub const Task = common.Task;
     pub const RealtimeSched = @import("wsqueue/sched_rt.zig");
     pub const DefaultSched = @import("wsqueue/sched_gp.zig");
     test "test sched submodules" {
