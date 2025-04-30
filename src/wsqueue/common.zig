@@ -1,4 +1,11 @@
 pub const ASNode = @import("as_type_wrapper.zig").ASNode;
+pub const ASFunction = @import("as_fn_wrapper.zig").ASFuture;
+test "test submodules" {
+    _ = .{
+        ASNode,
+        ASFunction,
+    };
+}
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

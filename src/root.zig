@@ -6,13 +6,13 @@ pub const thread = @import("threads/thread.zig");
 
 pub const sched = struct {
     pub const common = @import("wsqueue/common.zig");
-    pub const realtime = @import("wsqueue/sched_rt.zig");
-    pub const default = @import("wsqueue/sched_gp.zig");
+    pub const RealtimeSched = @import("wsqueue/sched_rt.zig");
+    pub const DefaultSched = @import("wsqueue/sched_gp.zig");
     test "test sched submodules" {
         _ = .{
             common,
-            realtime,
-            default,
+            RealtimeSched,
+            DefaultSched,
         };
     }
 };
