@@ -69,11 +69,8 @@ pub fn ASFuture(Fn: anytype) type {
             return !self.blocked.load(.acquire);
         }
         pub fn result(self: *@This()) FnRet {
-            if (self.blocked.load(.acquire)) unreachable;
-            if (self.mutex.tryLock()) {
-                self.mutex.unlock();
-                return self.fnret;
-            } else unreachable;
+            if (self.blocked.load(.acquire)) @panic("result still pending");
+            return self.fnret;
         }
 
         pub fn deinit(self: *@This(), alloc: Allocator) void {
