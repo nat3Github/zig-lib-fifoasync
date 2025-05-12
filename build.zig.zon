@@ -4,7 +4,8 @@
     .version = "0.0.0",
     .dependencies = .{
         .mpmc = .{
-            .path = "../mpmc",
+            .url = "git+https://github.com/nat3Github/zig-lib-mpmc#eac87094d27787fcd74c248064dd69a0f39787fc",
+            .hash = "mpmc-0.0.0-I610O4LPAgBF_jLIpSyHcV99mSw3WnruC9gtxjmcAJ9F",
         },
     },
     .paths = .{
