@@ -38,9 +38,13 @@ pub fn ASFuture(Fn: anytype) type {
         fnarg: FnArg = undefined,
         fnret: FnRet = undefined,
         state: Atomic(TaskState) = Atomic(TaskState).init(.default),
+        re: std.Thread.ResetEvent = .{},
 
         pub fn join(self: *@This()) void {
             if (self.state.load(.acquire) != .unitialized) {
+                if (!self.result_ready()) {
+                    self.re.wait();
+                }
                 while (!self.result_ready()) {}
             }
         }
@@ -49,6 +53,7 @@ pub fn ASFuture(Fn: anytype) type {
             if (self.is_running()) return error.TaskIsBusy;
             self.fnarg = args;
             self.state.store(.running, .release);
+            self.re.reset();
             self.task.set(@This(), self, anyopaque_run);
             if (@TypeOf(async_executor) == *std.Thread.Pool) {
                 const pool: *std.Thread.Pool = async_executor;
@@ -75,6 +80,7 @@ pub fn ASFuture(Fn: anytype) type {
         fn anyopaque_run(p: *anyopaque) void {
             const self: *@This() = @alignCast(@ptrCast(p));
             self.fnret = @call(.auto, @This().fnc, self.fnarg);
+            self.re.set();
             self.state.store(.finished, .release);
         }
     };
