@@ -20,11 +20,15 @@ const ResetEvent = std.Thread.ResetEvent;
 const fifoasync = @import("fifoasync");
 const lib_mpmc = @import("mpmc");
 
-/// NOTE improvements for later: how does one realize begin date and due date?
-///  -> planning of tasks
-///  -> do tasks dependent on there due date
-///
 const MPMC = lib_mpmc.MPMC_SQC(.{ .order = 16, .slot_count = 16384, .T = Task });
+
+const default_start_fn = thread.prio.set_realtime_critical_high;
+pub const Config = struct {
+    alloc: Allocator,
+    N_threads: usize,
+    N_tiers: usize,
+    startup_fn: *const fn () anyerror!void = default_start_fn,
+};
 
 pub const Sched = @This();
 tier_list: []*AtomicU32,
@@ -79,19 +83,19 @@ fn switch_to_tier(tier_thread_count: []*AtomicU32, current_tier: *usize, tier: u
     _ = tier_thread_count[current_tier.*].fetchAdd(1, .acq_rel);
 }
 
-pub fn init_stack(arena: std.heap.ArenaAllocator, N_threads: usize, N_tiers: usize) !Sched {
-    assert(N_tiers != 0);
-    assert(N_threads > 0);
+pub fn init_stack(arena: std.heap.ArenaAllocator, cfg: Config) !Sched {
+    assert(cfg.N_tiers != 0);
+    assert(cfg.N_threads > 0);
     var xarena = arena;
     const alloc = xarena.allocator();
 
-    const mpmc: []MPMC = try alloc.alloc(MPMC, N_tiers);
-    const tier_thread_count: []*AtomicU32 = try alloc.alloc(*AtomicU32, N_tiers);
-    const wthandle: []Thread = try alloc.alloc(Thread, N_threads);
+    const mpmc: []MPMC = try alloc.alloc(MPMC, cfg.N_tiers);
+    const tier_thread_count: []*AtomicU32 = try alloc.alloc(*AtomicU32, cfg.N_tiers);
+    const wthandle: []Thread = try alloc.alloc(Thread, cfg.N_threads);
 
     for (mpmc) |*j| j.* = try MPMC.init(alloc);
     for (tier_thread_count) |*j| j.* = try alloc.create(AtomicU32);
-    tier_thread_count[0].* = AtomicU32.init(@intCast(N_threads)); // all threads start on tier 0
+    tier_thread_count[0].* = AtomicU32.init(@intCast(cfg.N_threads)); // all threads start on tier 0
     for (tier_thread_count[1..]) |j| j.* = AtomicU32.init(0);
 
     for (wthandle, 0..) |*j, i| {
@@ -115,10 +119,11 @@ pub fn init_stack(arena: std.heap.ArenaAllocator, N_threads: usize, N_tiers: usi
         .arena = xarena,
     };
 }
-pub fn init(alloc: Allocator, N_threads: usize, N_tiers: usize) !*Sched {
-    var arena = std.heap.ArenaAllocator.init(alloc);
+
+pub fn init(cfg: Config) !*Sched {
+    var arena = std.heap.ArenaAllocator.init(cfg.alloc);
     const p = try arena.allocator().create(Sched);
-    const t = try init_stack(arena, N_threads, N_tiers);
+    const t = try init_stack(arena, cfg);
     p.* = t;
     return p;
 }
@@ -164,6 +169,7 @@ pub const AsyncExecutor = struct {
         self.sched.threads[len - 1].wakeup();
     }
 };
+
 fn make_reset_event(alloc: Allocator) !*ResetEvent {
     const re = try alloc.create(ResetEvent);
     re.* = ResetEvent{};

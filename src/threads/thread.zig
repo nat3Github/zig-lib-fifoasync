@@ -5,6 +5,10 @@ const Allocator = std.mem.Allocator;
 const AtomicOrder = std.builtin.AtomicOrder;
 const AtomicU8 = Atomic(u8);
 const ResetEvent = std.Thread.ResetEvent;
+pub const prio = @import("thread_prio.zig");
+test "prio" {
+    _ = prio;
+}
 
 pub const StopSignal = struct {
     const This = @This();

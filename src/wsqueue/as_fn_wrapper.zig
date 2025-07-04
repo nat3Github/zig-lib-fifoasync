@@ -7,55 +7,53 @@ const expect = std.testing.expect;
 
 const Atomic = std.atomic.Value;
 const AtomicOrder = std.builtin.AtomicOrder;
-const AtomicBool = Atomic(bool);
 
 const Type = std.builtin.Type;
 const Task = root.sched.Task;
 
-fn arg_tuple_from_fn_typeinfo(comptime Fn: Type.Fn) type {
-    var fields: [Fn.params.len]Type.StructField = undefined;
-    const params = Fn.params;
-    inline for (&fields, params, 0..) |*field, param, i| {
-        field.* = Type.StructField{
-            .name = std.fmt.comptimePrint("{}", .{i}),
-            .type = param.type.?,
-            .alignment = 0,
-            .default_value_ptr = null,
-            .is_comptime = false,
-        };
-    }
-    return @Type(Type{ .@"struct" = Type.Struct{
-        .layout = .auto,
-        .fields = &fields,
-        .decls = &.{},
-        .is_tuple = true,
-    } });
+fn arg_tuple_from_fn(comptime f: type) type {
+    assert(comptime @typeInfo(f).@"fn".calling_convention != .@"inline");
+    return std.meta.ArgsTuple(f);
 }
 
-/// stores fn args and return data on the heap and wires a Task
+const TaskState = enum(u8) {
+    const default: TaskState = .unitialized;
+    unitialized,
+    running,
+    finished,
+};
+
+/// stores fn args and return data and wires a Task
 /// to the fn that can be executed by an async executor by calling Task.call()
+/// make sure the memory is defined for the duration of the async call!
+/// call join to wait for the end of the task!
 pub fn ASFuture(Fn: anytype) type {
     return struct {
         const FnT = @TypeOf(Fn);
-        const FnArg = arg_tuple_from_fn_typeinfo(@typeInfo(FnT).@"fn");
+        const FnArg = arg_tuple_from_fn(FnT); //arg_tuple_from_fn_typeinfo(@typeInfo(FnT).@"fn");
         const FnRet = @typeInfo(FnT).@"fn".return_type.?;
         const fnc: *const FnT = Fn;
-        // mutex: std.Thread.Mutex = std.Thread.Mutex{},
+
         task: Task = Task{},
         fnarg: FnArg = undefined,
         fnret: FnRet = undefined,
-        blocked: AtomicBool = AtomicBool.init(false),
+        state: Atomic(TaskState) = Atomic(TaskState).init(.default),
 
-        pub fn init(alloc: Allocator) !*@This() {
-            const this = try alloc.create(@This());
-            this.* = @This(){};
-            this.task.set(@This(), this, anyopaque_process);
-            return this;
+        pub fn join(self: *@This()) void {
+            if (self.state.load(.acquire) != .unitialized) {
+                while (!self.result_ready()) {}
+            }
         }
-        pub fn call(self: *@This(), args: FnArg, async_executor: anytype) !void {
-            if (self.blocked.load(.acquire)) @panic("result is still pending");
+        /// NOTE the Memory of *@This() must remain well defined till the task has finished !!!
+        pub inline fn call(self: *@This(), args: FnArg, async_executor: anytype) !void {
+            if (self.is_running()) return error.TaskIsBusy;
             self.fnarg = args;
-            self.blocked.store(true, .release);
+            self.state.store(.running, .release);
+            self.task.set(@This(), self, anyopaque_run);
+            if (@TypeOf(async_executor) == *std.Thread.Pool) {
+                const pool: *std.Thread.Pool = async_executor;
+                return try pool.spawn(Task.call, .{&self.task});
+            }
             switch (@typeInfo(@typeInfo(@TypeOf(@TypeOf(async_executor).exe)).@"fn".return_type.?)) {
                 .void => {
                     return async_executor.exe(&self.task);
@@ -65,24 +63,19 @@ pub fn ASFuture(Fn: anytype) type {
                 },
             }
         }
-        pub fn result_ready(self: *@This()) bool {
-            return !self.blocked.load(.acquire);
+        pub inline fn is_running(self: *@This()) bool {
+            return self.state.load(.acquire) == .running;
         }
-        pub fn result(self: *@This()) FnRet {
-            if (self.blocked.load(.acquire)) @panic("result still pending");
-            return self.fnret;
+        inline fn result_ready(self: *@This()) bool {
+            return self.state.load(.acquire) == .finished;
         }
-
-        pub fn deinit(self: *@This(), alloc: Allocator) void {
-            alloc.destroy(self);
+        pub inline fn result(self: *@This()) ?FnRet {
+            if (self.result_ready()) return self.fnret else return null;
         }
-        fn process_fn(self: *@This()) void {
-            self.fnret = @call(.auto, @This().fnc, self.fnarg);
-            self.blocked.store(false, .release);
-        }
-        fn anyopaque_process(p: *anyopaque) void {
+        fn anyopaque_run(p: *anyopaque) void {
             const self: *@This() = @alignCast(@ptrCast(p));
-            self.process_fn();
+            self.fnret = @call(.auto, @This().fnc, self.fnarg);
+            self.state.store(.finished, .release);
         }
     };
 }

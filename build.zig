@@ -20,26 +20,28 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const test_step = b.step("test", "Run unit tests");
-
     const opts = .{ .target = target, .optimize = optimize };
 
-    const mpmc_dep = b.dependency("mpmc", opts);
-    const mpmc_module = mpmc_dep.module("mpmc");
-
-    // make library module
     const fifoasync_module = b.addModule("fifoasync", .{
         .root_source_file = b.path("src/root.zig"),
         .optimize = optimize,
         .target = target,
     });
+
+    const mpmc_dep = b.dependency("mpmc", opts);
+    const mpmc_module = mpmc_dep.module("mpmc");
     fifoasync_module.addImport("mpmc", mpmc_module);
+
+    const zigwin_mod = b.dependency("zigwin32", .{}).module("win32");
+    fifoasync_module.addImport("win32", zigwin_mod);
+
+    fifoasync_module.addIncludePath(b.path("src/include/"));
 
     const fifoasync_test = b.addTest(.{
         .root_module = fifoasync_module,
         .target = target,
         .optimize = optimize,
     });
-    // lib_test.root_module.addImport("zbench", zbench_module);
     const lib_test_run = b.addRunArtifact(fifoasync_test);
     test_step.dependOn(&lib_test_run.step);
 }

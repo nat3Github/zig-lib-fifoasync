@@ -1,27 +1,4 @@
-/// data is generally on the heap because it is shared between threads (most parts of it)
-/// in an nondeterministic os thread does not know when it gets woken up (+- a few milli secods)
-/// we need some polling approach to minimize latency
-/// if we wake up only to spin we are wasting a lot of resources
-/// idea:
-/// bounded mpmc high priority task queue, 1 or more bounded mpmc low priority task queues, N threads;
-/// algo simple:
-/// a thread wakes up, checks the highest priority task queue,
-///     if it finds a task it does it, go to top
-///     else
-///         check lower priority queue fetch a task after that go to top
-///
-/// optimize efficiency: measure load if load is low threads can be reduced
-///
-///
-///
-///
-/// Multiple MPMC QUE TIER for different priority TASKS
-/// threads always check TIER 1 first -> low latency tasks
-/// when there are no TIER 1 tasks -> check TIER 2 tasks
-///
-/// if the system is overloaded lower TIER tasks could starve
-///
-///
+/// polling schedular using high priority threads
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const root = @import("../root.zig");
@@ -34,7 +11,6 @@ const Timer = std.time.Timer;
 const assert = std.debug.assert;
 const expect = std.testing.expect;
 
-// const rtsp = root.threads.rtschedule;
 const Atomic = std.atomic.Value;
 const AtomicOrder = std.builtin.AtomicOrder;
 const AtomicU8 = Atomic(u8);
@@ -44,11 +20,15 @@ const ResetEvent = std.Thread.ResetEvent;
 const fifoasync = @import("fifoasync");
 const lib_mpmc = @import("mpmc");
 
-/// NOTE improvements for later: how does one realize begin date and due date?
-///  -> planning of tasks
-///  -> do tasks dependent on there due date
-///
 const MPMC = lib_mpmc.MPMC_SQC(.{ .order = 16, .slot_count = 16384, .T = Task });
+
+const default_start_fn = thread.prio.set_realtime_critical_highest;
+pub const Config = struct {
+    alloc: Allocator,
+    N_threads: usize,
+    N_tiers: usize,
+    startup_fn: *const fn () anyerror!void = default_start_fn,
+};
 
 pub const Sched = @This();
 tier_list: []*AtomicU32,
@@ -61,7 +41,10 @@ pub fn polling_tier_based_worker(
     ctrl: Control,
     mpmc: []MPMC,
     tier_thread_count: []*AtomicU32,
+    start_up_fn: anytype,
 ) !void {
+    // TODO: yield when no task available
+    try start_up_fn();
     var tier: usize = 0;
     var t = try Timer.start();
     while (ctrl.is_running()) {
@@ -90,22 +73,22 @@ fn switch_to_tier(tier_thread_count: []*AtomicU32, current_tier: *usize, tier: u
     _ = tier_thread_count[current_tier.*].fetchAdd(1, .acq_rel);
 }
 
-pub fn init_stack(arena: std.heap.ArenaAllocator, N_threads: usize, N_tiers: usize) !Sched {
-    assert(N_tiers != 0);
-    assert(N_threads > 0);
+pub fn init_stack(arena: std.heap.ArenaAllocator, cfg: Config) !Sched {
+    assert(cfg.N_tiers != 0);
+    assert(cfg.N_threads > 0);
     var xarena = arena;
     const alloc = xarena.allocator();
 
-    const mpmc: []MPMC = try alloc.alloc(MPMC, N_tiers);
-    const tier_thread_count: []*AtomicU32 = try alloc.alloc(*AtomicU32, N_tiers);
-    const wthandle: []Thread = try alloc.alloc(Thread, N_threads);
+    const mpmc: []MPMC = try alloc.alloc(MPMC, cfg.N_tiers);
+    const tier_thread_count: []*AtomicU32 = try alloc.alloc(*AtomicU32, cfg.N_tiers);
+    const wthandle: []Thread = try alloc.alloc(Thread, cfg.N_threads);
 
     for (mpmc) |*j| j.* = try MPMC.init(alloc);
     for (tier_thread_count) |*j| j.* = try alloc.create(AtomicU32);
-    tier_thread_count[0].* = AtomicU32.init(@intCast(N_threads)); // all threads start on tier 0
+    tier_thread_count[0].* = AtomicU32.init(@intCast(cfg.N_threads)); // all threads start on tier 0
     for (tier_thread_count[1..]) |j| j.* = AtomicU32.init(0);
     for (wthandle, 0..) |*j, i| j.* = try thread.thread(alloc, try std.fmt.allocPrint(alloc, "gp task thread {}", .{i}), polling_tier_based_worker, .{
-        mpmc, tier_thread_count,
+        mpmc, tier_thread_count, cfg.startup_fn,
     });
     return Sched{
         .mpmc = mpmc,
@@ -115,10 +98,11 @@ pub fn init_stack(arena: std.heap.ArenaAllocator, N_threads: usize, N_tiers: usi
         .arena = xarena,
     };
 }
-pub fn init(alloc: Allocator, N_threads: usize, N_tiers: usize) !*Sched {
-    var arena = std.heap.ArenaAllocator.init(alloc);
+/// startup fn will be run on each thread for setting thread priority
+pub fn init(cfg: Config) !*Sched {
+    var arena = std.heap.ArenaAllocator.init(cfg.alloc);
     const p = try arena.allocator().create(Sched);
-    const t = try init_stack(arena, N_threads, N_tiers);
+    const t = try init_stack(arena, cfg);
     p.* = t;
     return p;
 }

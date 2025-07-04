@@ -7,6 +7,10 @@
             .url = "git+https://github.com/nat3Github/zig-lib-mpmc#eac87094d27787fcd74c248064dd69a0f39787fc",
             .hash = "mpmc-0.0.0-I610O4LPAgBF_jLIpSyHcV99mSw3WnruC9gtxjmcAJ9F",
         },
+        .zigwin32 = .{
+            .url = "git+https://github.com/marlersoft/zigwin32#d21b419d808215e1f82605fdaddc49750bfa3bca",
+            .hash = "zigwin32-25.0.28-preview-AAAAAI0J-wP-8_KKo4Yjr33XLhVhlJmeagGUedByaOnX",
+        },
     },
     .paths = .{
         "build.zig",
