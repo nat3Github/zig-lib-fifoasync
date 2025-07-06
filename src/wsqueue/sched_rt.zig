@@ -1,14 +1,12 @@
 /// simple polling schedular using high priority threads
 /// uses spsc queues
-///
-///
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ResetEvent = std.Thread.ResetEvent;
 const root = @import("../root.zig");
 const Task = root.sched.Task;
 const thread = root.thread;
-const Spinlock = thread.Spinlock;
+const Spinlock = root.prim.Spinlock;
 const Timer = std.time.Timer;
 const Atomic = root.util.atomic.AcqRelAtomic;
 
