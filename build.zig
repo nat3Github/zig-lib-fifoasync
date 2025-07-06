@@ -20,17 +20,12 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const test_step = b.step("test", "Run unit tests");
-    const opts = .{ .target = target, .optimize = optimize };
 
     const fifoasync_module = b.addModule("fifoasync", .{
         .root_source_file = b.path("src/root.zig"),
         .optimize = optimize,
         .target = target,
     });
-
-    const mpmc_dep = b.dependency("mpmc", opts);
-    const mpmc_module = mpmc_dep.module("mpmc");
-    fifoasync_module.addImport("mpmc", mpmc_module);
 
     const zigwin_mod = b.dependency("zigwin32", .{}).module("win32");
     fifoasync_module.addImport("win32", zigwin_mod);

@@ -51,3 +51,24 @@ pub fn OneAccessToT(T: type) type {
         }
     };
 }
+
+/// this lock is safe to use in a audio realtime scenario
+/// use this when you want to mutate variables of something accesed by the realtime thread
+/// mutex = synchronized exclusiv access = only one can have it at a time
+/// use try_lock on the audio realtime thread which is wait free and lock on the thread which is blocking
+/// aka if (mtx.try_lock) { // proceed to use the variables on the realtime thread }
+/// NOTE: a lock is for synchronization and often compromises composability of functions, synchronization is best left to the end user because as he views the circumstances!
+pub const Spinlock = struct {
+    mtx: std.Thread.Mutex = .{},
+    pub fn lock(self: *Spinlock) void {
+        while (!self.mtx.tryLock()) {
+            std.Thread.yield() catch {};
+        }
+    }
+    pub fn unlock(self: *Spinlock) void {
+        self.mtx.unlock();
+    }
+    pub fn try_lock(self: *Spinlock) bool {
+        return self.mtx.tryLock();
+    }
+};
