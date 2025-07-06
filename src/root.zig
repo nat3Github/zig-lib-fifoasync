@@ -4,8 +4,9 @@ pub const thread = @import("threads/thread.zig");
 
 pub const sched = struct {
     const common = @import("wsqueue/common.zig");
-    pub const ASFunction = common.ASFunction;
     pub const Task = common.Task;
+    pub const AsyncExecutor = common.AsyncExecutor;
+    pub const ASFunction = common.ASFunction;
     pub const RealtimeSched = @import("wsqueue/sched_rt.zig");
     pub const DefaultSched = @import("wsqueue/sched_gp.zig");
     test "test sched submodules" {

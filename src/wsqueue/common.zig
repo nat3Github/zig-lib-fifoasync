@@ -103,3 +103,11 @@ pub fn ASFunction(Fn: anytype) type {
         }
     };
 }
+
+pub const AsyncExecutor = struct {
+    ptr: *anyopaque,
+    f: *const fn (*anyopaque, Task) anyerror!void,
+    pub fn execute(self: AsyncExecutor, task: Task) !void {
+        return self.f(self.ptr, task);
+    }
+};
