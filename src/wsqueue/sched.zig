@@ -4,27 +4,30 @@ const Allocator = std.mem.Allocator;
 const root = @import("../root.zig");
 const Task = root.sched.Task;
 const ThreadControl = root.thread.ThreadControl;
+const Spinlock = root.prim.Spinlock;
 
 const assert = std.debug.assert;
 const expect = std.testing.expect;
 
 pub const Sched = @This();
-pub const SPSC = root.spsc.Fifo2(Task);
+pub const SPSC = root.spsc.FlexFifo(Task, true, true);
 
 threads: []ThreadControl,
-spsc: []root.spsc.Fifo2(Task),
+spsc: []SPSC,
 
 pub fn init(alloc: Allocator, queues: usize, threads: usize, spsc_capacity: usize) !Sched {
     const spsc: []SPSC = try alloc.alloc(SPSC, queues);
     errdefer alloc.free(spsc);
-    const wthandle: []ThreadControl = try alloc.alloc(ThreadControl, threads);
-    errdefer alloc.free(wthandle);
-    for (wthandle) |*w| w.* = ThreadControl{};
     for (spsc) |*j| {
         const q = try SPSC.init(alloc, spsc_capacity);
         errdefer q.deinit(alloc);
         j.* = q;
     }
+
+    const wthandle: []ThreadControl = try alloc.alloc(ThreadControl, threads);
+    errdefer alloc.free(wthandle);
+    for (wthandle) |*w| w.* = ThreadControl{};
+
     return Sched{
         .spsc = spsc,
         .threads = wthandle,

@@ -1,6 +1,7 @@
 const std = @import("std");
 const AtomicOrder = std.builtin.AtomicOrder;
 const Allocator = std.mem.Allocator;
+const root = @import("../root.zig");
 
 /// Single Producer Single Consumer Lockfree Queue Algorithm according to:
 /// https://www.irif.fr/~guatto/papers/sbac13.pdf WeakRB Algorithm
@@ -131,6 +132,35 @@ pub fn Fifo2(comptime T: type) type {
                 return null;
             };
             return empty[0];
+        }
+    };
+}
+pub fn FlexFifo(comptime T: type, multi_reader: bool, multi_writer: bool) type {
+    return struct {
+        fifo: Fifo2(T),
+        reader_lock: root.prim.Spinlock = .{},
+        writer_lock: root.prim.Spinlock = .{},
+        pub fn init(alloc: Allocator, capacity: usize) !@This() {
+            return @This(){
+                .fifo = try Fifo2(T).init(alloc, capacity),
+            };
+        }
+        pub fn deinit(self: *@This(), alloc: Allocator) void {
+            self.fifo.deinit(alloc);
+        }
+        pub fn push(self: *@This(), item: T) !void {
+            if (comptime multi_writer) {
+                self.writer_lock.lock();
+                defer self.writer_lock.unlock();
+                try self.fifo.push(item);
+            } else try self.fifo.push(item);
+        }
+        pub fn pop(self: *@This()) ?T {
+            if (comptime multi_reader) {
+                self.reader_lock.lock();
+                defer self.reader_lock.unlock();
+                return self.fifo.pop();
+            } else return self.fifo.pop();
         }
     };
 }

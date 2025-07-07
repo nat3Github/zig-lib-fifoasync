@@ -62,7 +62,7 @@ pub const Spinlock = struct {
     mtx: std.Thread.Mutex = .{},
     pub fn lock(self: *Spinlock) void {
         while (!self.mtx.tryLock()) {
-            std.Thread.yield() catch {};
+            // std.Thread.yield() catch {};
         }
     }
     pub fn unlock(self: *Spinlock) void {

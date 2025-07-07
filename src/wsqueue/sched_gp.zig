@@ -27,26 +27,19 @@ pub const Config = struct {
 pub const Sched = @This();
 
 sched: BaseSched,
-lock: []Spinlock,
-arena: std.heap.ArenaAllocator,
 
 pub fn waiting_worker(
     ctrl: thread.ThreadStatus,
     spsc: []BaseSched.SPSC,
-    lock: []Spinlock,
     start_up_fn: anytype,
     wakeup_next: ?*ResetEvent,
 ) !void {
     try start_up_fn();
     var nothing_count: u8 = 0;
     while (ctrl.signal.load() != .stop_signal) {
-        for (spsc, lock) |*q, *l| {
-            var popped: ?Task = null;
-            if (l.try_lock()) {
-                defer l.unlock();
-                popped = q.pop();
-            } else continue;
-            if (popped) |task| {
+        for (spsc) |*q| {
+            const pop = q.pop();
+            if (pop) |task| {
                 nothing_count = 0;
                 task.call();
             } else {
@@ -69,41 +62,25 @@ pub fn waiting_worker(
 pub fn init(alloc: Allocator, cfg: Config) !Sched {
     assert(cfg.N_queues != 0);
     assert(cfg.N_threads > 0);
-    const lock = try alloc.alloc(Spinlock, cfg.N_queues);
-    errdefer alloc.free(lock);
-    for (lock) |*s| s.* = Spinlock{};
-
     var bsched = try BaseSched.init(alloc, cfg.N_queues, cfg.N_threads, cfg.N_queue_capacity);
     errdefer bsched.deinit(alloc);
-    var arena = std.heap.ArenaAllocator.init(alloc);
     for (bsched.threads, 0..) |*j, i| {
         var next: ?*ResetEvent = null;
         if (i != 0) {
             next = &bsched.threads[i - 1].handle_sets_thread_waits;
         }
-        const dbg_name = try std.fmt.allocPrint(arena.allocator(), "gp task thread {}", .{i});
-        const th = try j.spawn(alloc, dbg_name, waiting_worker, .{ bsched.spsc, lock, cfg.startup_fn, next });
-        errdefer {
-            j.stop_or_timeout(3_000_000_000) catch {};
-        }
-        th.detach();
-        j.spinwait_for_startup();
+        try j.spawn(alloc, "gp task thread {}", .{i}, waiting_worker, .{ bsched.spsc, cfg.startup_fn, next });
+        errdefer j.join(alloc);
     }
     return Sched{
-        .arena = arena,
         .sched = bsched,
-        .lock = lock,
     };
 }
 pub fn deinit(self: *Sched, alloc: Allocator) void {
     for (self.sched.threads) |*j| {
-        j.stop_or_timeout(3_000_000_000) catch {
-            std.log.err("stop thread failed", .{});
-        };
+        j.join(alloc);
     }
     self.sched.deinit(alloc);
-    alloc.free(self.lock);
-    self.arena.deinit();
 }
 
 const Executor = struct {
