@@ -39,22 +39,6 @@ pub fn deinit(self: *Sched, alloc: Allocator) void {
     defer alloc.free(self.threads);
 }
 
-pub const AsyncExecutor = struct {
-    sched: *Sched,
-    que_idx: usize,
-    pub fn exe(self: AsyncExecutor, task: Task) void {
-        self.sched.spsc[self.que_idx].push(task) catch unreachable;
-    }
-};
-
-pub fn get_async_executor(self: *Sched, que_index: usize) AsyncExecutor {
-    if (que_index >= self.mpmc.len) @panic("oob");
-    return AsyncExecutor{
-        .sched = self,
-        .que_idx = que_index,
-    };
-}
-
 pub const TestStruct = struct {
     fn recast(T: type, ptr: *anyopaque) *T {
         return @as(*T, @alignCast(@ptrCast(ptr)));

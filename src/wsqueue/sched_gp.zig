@@ -11,7 +11,6 @@ const Timer = std.time.Timer;
 const Atomic = root.util.atomic.AcqRelAtomic;
 
 const BaseSched = @import("sched.zig");
-pub const AsyncExecutor = BaseSched.AsyncExecutor;
 
 const assert = std.debug.assert;
 const expect = std.testing.expect;
@@ -107,10 +106,25 @@ pub fn deinit(self: *Sched, alloc: Allocator) void {
     self.arena.deinit();
 }
 
-pub fn get_async_executor(self: *Sched, queue_index: usize) AsyncExecutor {
-    if (queue_index >= self.sched.spsc.len) @panic("oob");
-    return AsyncExecutor{ .sched = &self.sched, .que_idx = queue_index };
+const Executor = struct {
+    sched: *Sched,
+    que_idx: usize,
+};
+fn exe(self: *Executor, task: Task) anyerror!void {
+    try self.sched.sched.spsc[self.que_idx].push(task);
+    self.sched.wake_sched();
 }
+
+pub fn get_executor(self: *Sched, queue_index: usize) root.sched.GenericAsyncExecutor(Executor, exe) {
+    if (queue_index >= self.sched.spsc.len) @panic("oob");
+    return .{
+        .inner = Executor{
+            .sched = self,
+            .que_idx = queue_index,
+        },
+    };
+}
+
 pub fn wake_sched(self: *Sched) void {
     const len = self.sched.threads.len;
     self.sched.threads[len - 1].wakeup();
@@ -128,7 +142,7 @@ test "sched test" {
         .N_threads = 2,
     });
     defer ps.deinit(alloc);
-    const as_exe = ps.get_async_executor(0);
+    const as_exe = ps.get_executor(0);
 
     var ex_struct = ExampleStruct{
         .age = 90,

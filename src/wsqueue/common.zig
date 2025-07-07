@@ -77,6 +77,9 @@ pub fn ASFunction(Fn: anytype) type {
                 const pool: *std.Thread.Pool = async_executor;
                 return try pool.spawn(Task.call, .{task});
             }
+            if (@TypeOf(async_executor) == AsyncExecutor) {
+                return try async_executor.execute(task);
+            }
             switch (@typeInfo(@typeInfo(@TypeOf(@TypeOf(async_executor).exe)).@"fn".return_type.?)) {
                 .void => {
                     return async_executor.exe(task);
@@ -107,7 +110,23 @@ pub fn ASFunction(Fn: anytype) type {
 pub const AsyncExecutor = struct {
     ptr: *anyopaque,
     f: *const fn (*anyopaque, Task) anyerror!void,
-    pub fn execute(self: AsyncExecutor, task: Task) !void {
-        return self.f(self.ptr, task);
+    pub fn execute(Self: AsyncExecutor, task: Task) !void {
+        return Self.f(Self.ptr, task);
     }
 };
+
+pub fn GenericAsyncExecutor(T: type, f_exe: *const fn (*T, Task) anyerror!void) type {
+    return struct {
+        inner: T,
+        const This = @This();
+        pub fn async_executor(self: *@This()) AsyncExecutor {
+            const m = struct {
+                fn any_exe(ptr: *anyopaque, task: Task) anyerror!void {
+                    const this: *This = @alignCast(@ptrCast(ptr));
+                    return f_exe(&this.inner, task);
+                }
+            };
+            return root.sched.AsyncExecutor{ .ptr = self, .f = m.any_exe };
+        }
+    };
+}
