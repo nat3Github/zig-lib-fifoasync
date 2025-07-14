@@ -85,7 +85,7 @@ pub const ThreadControl = struct {
                 _ = @call(.auto, fnc, .{th_status} ++ xargs) catch |e| {
                     std.log.err("{s}: {}", .{ dbg_name, e });
                 };
-                std.log.info("{s} Thread is terminating...", .{dbg_name});
+                std.log.info("{s} is terminating...", .{dbg_name});
                 th_status.signal.store(.stopped);
             }
         };

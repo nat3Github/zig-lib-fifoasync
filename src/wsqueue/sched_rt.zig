@@ -18,7 +18,7 @@ const expect = std.testing.expect;
 const default_start_fn = thread.prio.set_realtime_critical_highest;
 pub const Config = struct {
     N_threads: usize,
-    N_queues: usize,
+    N_queues: usize = 1,
     N_queue_capacity: usize = std.math.powi(usize, 2, 12) catch unreachable,
     startup_fn: *const fn () anyerror!void = default_start_fn,
 };
@@ -47,7 +47,7 @@ pub fn init(alloc: Allocator, cfg: Config) !Sched {
     var bsched = try BaseSched.init(alloc, cfg.N_queues, cfg.N_threads, cfg.N_queue_capacity);
     errdefer bsched.deinit(alloc);
     for (bsched.threads, 0..) |*j, i| {
-        j.spawn(alloc, "gp task thread {}", .{i}, polling_worker, .{
+        j.spawn(alloc, "RT task thread {}", .{i + 1}, polling_worker, .{
             bsched.spsc, cfg.startup_fn,
         }) catch unreachable;
     }
@@ -63,18 +63,19 @@ pub fn deinit(self: *Sched, alloc: Allocator) void {
     self.sched.deinit(alloc);
 }
 
-const Executor = struct {
+const Exe = struct {
     sched: *Sched,
     que_idx: usize,
 };
-fn exe(self: *Executor, task: Task) anyerror!void {
+fn exe(self: *Exe, task: Task) anyerror!void {
     try self.sched.sched.spsc[self.que_idx].push(task);
 }
 
-pub fn get_executor(self: *Sched, queue_index: usize) root.sched.GenericAsyncExecutor(Executor, exe) {
+pub const Executor = root.sched.GenericAsyncExecutor(Exe, exe);
+pub fn get_executor(self: *Sched, queue_index: usize) Executor {
     if (queue_index >= self.sched.spsc.len) @panic("oob");
     return .{
-        .inner = Executor{
+        .inner = Exe{
             .sched = self,
             .que_idx = queue_index,
         },

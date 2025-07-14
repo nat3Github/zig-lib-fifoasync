@@ -58,14 +58,23 @@ pub fn ASFunction(Fn: anytype) type {
         re: std.Thread.ResetEvent = .{},
 
         pub fn join(self: *@This()) void {
-            if (self.state.load(.acquire) != .unitialized) {
-                if (!self.result_ready()) {
+            if (self.state.load(.acquire) == .unitialized) return;
+
+            if (!self.result_ready()) {
+                std.log.warn("wait", .{});
+                if (@import("builtin").mode == .Debug) {
+                    self.re.timedWait(100_000_000) catch {
+                        std.log.err("join failed after 100 ms", .{});
+                        return;
+                    };
+                } else {
                     self.re.wait();
                 }
-                while (!self.result_ready()) {}
             }
+            while (!self.result_ready()) {}
         }
         /// NOTE the Memory of *@This() must remain well defined till the task has finished !!!
+        /// threadsafe
         pub inline fn call(self: *@This(), args: FnArg, async_executor: anytype) !void {
             if (self.is_running()) return error.TaskIsBusy;
             self.fnarg = args;
@@ -89,12 +98,15 @@ pub fn ASFunction(Fn: anytype) type {
                 },
             }
         }
+        /// threadsafe
         pub inline fn is_running(self: *@This()) bool {
             return self.state.load(.acquire) == .running;
         }
+        /// threadsafe
         inline fn result_ready(self: *@This()) bool {
             return self.state.load(.acquire) == .finished;
         }
+        /// threadsafe
         pub inline fn result(self: *@This()) ?FnRet {
             if (self.result_ready()) return self.fnret else return null;
         }
@@ -112,6 +124,18 @@ pub const AsyncExecutor = struct {
     f: *const fn (*anyopaque, Task) anyerror!void,
     pub fn execute(Self: AsyncExecutor, task: Task) !void {
         return Self.f(Self.ptr, task);
+    }
+    pub fn from_std_pool(pool: *std.Thread.Pool) AsyncExecutor {
+        const m = struct {
+            fn f(p: *anyopaque, t: Task) anyerror!void {
+                const pp: *std.Thread.Pool = @alignCast(@ptrCast(p));
+                try pp.spawn(Task.call, .{t});
+            }
+        };
+        return AsyncExecutor{
+            .ptr = pool,
+            .f = &m.f,
+        };
     }
 };
 
