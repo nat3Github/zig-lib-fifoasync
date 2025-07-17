@@ -2,6 +2,7 @@
     .fingerprint = 0xbe2de7db0000fa5e,
     .name = .fifoasync,
     .version = "0.0.0",
+    .minimum_zig_version = "0.14.1",
     .dependencies = .{
         .zigwin32 = .{
             .url = "git+https://github.com/marlersoft/zigwin32#d21b419d808215e1f82605fdaddc49750bfa3bca",

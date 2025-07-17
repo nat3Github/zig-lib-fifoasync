@@ -91,7 +91,7 @@ test "sched test" {
         .N_threads = 2,
     });
     defer ps.deinit(alloc);
-    const as_exe = ps.get_executor(0);
+    var as_exe = ps.get_executor(0);
 
     var ex_struct = ExampleStruct{
         .age = 90,
@@ -114,11 +114,11 @@ test "sched test" {
         _ = i;
         ex_struct.timer = Timer.start() catch unreachable;
         task.set(ExampleStruct, &ex_struct, ExampleStruct.say_my_name_type_erased);
-        as_exe.exe(task);
+        try as_exe.async_executor().execute(task);
 
         ex_struct2.timer = Timer.start() catch unreachable;
         task2.set(ExampleStruct, &ex_struct2, ExampleStruct.say_my_name_lie_type_erased);
-        as_exe.exe(task2);
+        try as_exe.async_executor().execute(task2);
 
         std.Thread.sleep(200e6);
     }

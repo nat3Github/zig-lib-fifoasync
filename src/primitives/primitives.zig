@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 /// for safe use of from two threads (T is either available at the local thread or at the second thread)
@@ -61,8 +62,20 @@ pub fn OneAccessToT(T: type) type {
 pub const Spinlock = struct {
     mtx: std.Thread.Mutex = .{},
     pub fn lock(self: *Spinlock) void {
+        for (0..64) |_| {
+            if (self.mtx.tryLock()) return;
+            yield_cpu();
+        }
+        for (0..64) |_| {
+            if (self.mtx.tryLock()) return;
+            inline for (0..2) |_| yield_cpu();
+        }
+        for (0..64) |_| {
+            if (self.mtx.tryLock()) return;
+            inline for (0..4) |_| yield_cpu();
+        }
         while (!self.mtx.tryLock()) {
-            // std.Thread.yield() catch {};
+            inline for (0..8) |_| yield_cpu();
         }
     }
     pub fn unlock(self: *Spinlock) void {
@@ -72,3 +85,23 @@ pub const Spinlock = struct {
         return self.mtx.tryLock();
     }
 };
+
+/// @brief Yields the CPU to improve efficiency in busy-wait loops.
+/// On x86, this emits the `pause` instruction.
+/// On ARM64, this emits the `yield` instruction.
+/// For other architectures, it currently does nothing.
+pub fn yield_cpu() void {
+    const current_arch = builtin.target.cpu.arch;
+    if (current_arch.isX86()) {
+        asm volatile ("pause");
+    } else if (current_arch.isAARCH64()) {
+        asm volatile ("yield");
+    } else {
+        @compileError("not available for this architecture");
+    }
+}
+
+test "yield_cpu does not crash" {
+    yield_cpu();
+    std.debug.print("yield_cpu called successfully on {s}.\n", .{@tagName(builtin.target.cpu.arch)});
+}
