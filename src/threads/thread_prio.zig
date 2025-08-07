@@ -1,6 +1,16 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const c = @cImport(@cInclude("macOS/pthread/pthread.h"));
+const c = pthread: {
+    if (builtin.target.os.tag == .linux) {
+        // Use the Linux-specific pthread.h
+        break :pthread @cImport(@cInclude("pthread.h"));
+    } else if (builtin.target.os.tag == .macos) {
+        // Use the macOS-specific pthread.h
+        @cImport(@cInclude("../include/macOS/pthread/pthread.h"));
+    }
+    break :pthread null; // or just import the correct header
+};
+
 const win32 = @import("win32");
 const builtin = @import("builtin");
 const Pool = @import("pool.zig");
@@ -37,7 +47,7 @@ fn my_thread(time: std.time.Timer) void {
     // _ = f;
     std.debug.print("time elapsed: {d:.3} ms\n", .{f / 1_000_000.0});
 }
-fn supports_pthread() bool {
+pub fn supports_pthread() bool {
     const linux = builtin.target.os.tag == .linux;
     const macos = builtin.target.os.tag == .macos;
     const freebsd = builtin.target.os.tag == .freebsd;
@@ -45,14 +55,14 @@ fn supports_pthread() bool {
 }
 
 pub fn set_realtime_critical_highest() !void {
-    if (supports_pthread()) {
+    if (comptime supports_pthread()) {
         try pthread.set_prio(.Fifo, 0.9);
     } else if (builtin.target.os.tag == .windows) {
         try win32thread.set_thread_prio(.PRIORITY_TIME_CRITICAL);
     }
 }
 pub fn set_realtime_critical_high() !void {
-    if (supports_pthread()) {
+    if (comptime supports_pthread()) {
         try pthread.set_prio(.RR, 0.7);
     } else if (builtin.target.os.tag == .windows) {
         try win32thread.set_thread_prio(.PRIORITY_HIGHEST);
@@ -78,64 +88,68 @@ const win32thread = struct {
 
 /// NOTE: SCHED_FIFO is better suited for a RT-schedular than SCHED_RR because it has no time quantum after it gets preempted. preemption is bad because a task could be left unfinished when preempted
 /// SCHED_DEADLINE maybe useable but only on linux ...
-pub const pthread = struct {
-    /// prio 1.0 highest 0.0 lowest
-    pub fn set_prio(policy: SchedPolicy, prio: f32) !void {
-        assert(prio >= 0.0 and prio <= 1.0);
-        const max: c_int = get_priority_max(policy);
-        const min: c_int = get_priority_min(policy);
-        const maxf: f32 = @floatFromInt(max);
-        const minf: f32 = @floatFromInt(min);
-        const delta = maxf - minf;
-        const val = std.math.clamp(minf + delta * prio, @min(maxf, minf), @max(maxf, minf));
-        const cprio: c_int = @intFromFloat(val);
-        const self_thread = try get_current_thread();
-        try set_thread_scheduling(self_thread, policy, cprio);
-    }
+pub const pthread =
+    if (supports_pthread())
+        struct {
+            /// prio 1.0 highest 0.0 lowest
+            pub fn set_prio(policy: SchedPolicy, prio: f32) !void {
+                assert(prio >= 0.0 and prio <= 1.0);
+                const max: c_int = get_priority_max(policy);
+                const min: c_int = get_priority_min(policy);
+                const maxf: f32 = @floatFromInt(max);
+                const minf: f32 = @floatFromInt(min);
+                const delta = maxf - minf;
+                const val = std.math.clamp(minf + delta * prio, @min(maxf, minf), @max(maxf, minf));
+                const cprio: c_int = @intFromFloat(val);
+                const self_thread = try get_current_thread();
+                try set_thread_scheduling(self_thread, policy, cprio);
+            }
 
-    pub const SchedPolicy = struct {
-        pub const Other = SchedPolicy{ .policy = c.SCHED_OTHER };
-        pub const Fifo = SchedPolicy{ .policy = c.SCHED_FIFO };
-        pub const RR = SchedPolicy{ .policy = c.SCHED_RR };
-        policy: c_int,
-        pub fn get_str(Self: SchedPolicy) []const u8 {
-            if (Self.policy == c.SCHED_FIFO) return "FIFO";
-            if (Self.policy == c.SCHED_RR) return "RR";
-            if (Self.policy == c.SCHED_OTHER) return "OTHER";
-            return "ERROR";
+            pub const SchedPolicy = struct {
+                pub const Other = SchedPolicy{ .policy = c.SCHED_OTHER };
+                pub const Fifo = SchedPolicy{ .policy = c.SCHED_FIFO };
+                pub const RR = SchedPolicy{ .policy = c.SCHED_RR };
+                policy: c_int,
+                pub fn get_str(Self: SchedPolicy) []const u8 {
+                    if (Self.policy == c.SCHED_FIFO) return "FIFO";
+                    if (Self.policy == c.SCHED_RR) return "RR";
+                    if (Self.policy == c.SCHED_OTHER) return "OTHER";
+                    return "ERROR";
+                }
+            };
+
+            pub fn get_priority_min(Self: SchedPolicy) c_int {
+                return c.sched_get_priority_min(Self.policy);
+            }
+            pub fn get_priority_max(Self: SchedPolicy) c_int {
+                return c.sched_get_priority_max(Self.policy);
+            }
+
+            pub fn get_current_thread() !c.pthread_t {
+                var self_thread: c.pthread_t = undefined;
+                self_thread = c.pthread_self();
+                return self_thread;
+            }
+
+            pub fn get_thread_scheduling(self_thread: c.pthread_t) !struct {
+                policy: SchedPolicy,
+                priority: c_int,
+            } {
+                var current_policy: c_int = undefined;
+                var current_param: c.sched_param = undefined; // To store the priority after setting
+                const get_result = c.pthread_getschedparam(self_thread, &current_policy, &current_param);
+                if (get_result != 0) return error.FailedFetchingThreadPolicy;
+                return .{
+                    .policy = SchedPolicy{ .policy = current_policy },
+                    .priority = current_param.sched_priority,
+                };
+            }
+
+            pub fn set_thread_scheduling(self_thread: c.pthread_t, policy: SchedPolicy, prio: c_int) !void {
+                var new_param: c.sched_param = .{ .sched_priority = prio };
+                const set_result = c.pthread_setschedparam(self_thread, policy.policy, &new_param);
+                if (set_result != 0) return error.FailedSettingThreadPolicy;
+            }
         }
-    };
-
-    pub fn get_priority_min(Self: SchedPolicy) c_int {
-        return c.sched_get_priority_min(Self.policy);
-    }
-    pub fn get_priority_max(Self: SchedPolicy) c_int {
-        return c.sched_get_priority_max(Self.policy);
-    }
-
-    pub fn get_current_thread() !c.pthread_t {
-        var self_thread: c.pthread_t = undefined;
-        self_thread = c.pthread_self();
-        return self_thread;
-    }
-
-    pub fn get_thread_scheduling(self_thread: c.pthread_t) !struct {
-        policy: SchedPolicy,
-        priority: c_int,
-    } {
-        var current_policy: c_int = undefined;
-        var current_param: c.sched_param = undefined; // To store the priority after setting
-        const get_result = c.pthread_getschedparam(self_thread, &current_policy, &current_param);
-        if (get_result != 0) return error.FailedFetchingThreadPolicy;
-        return .{
-            .policy = SchedPolicy{ .policy = current_policy },
-            .priority = current_param.sched_priority,
-        };
-    }
-
-    pub fn set_thread_scheduling(self_thread: c.pthread_t, policy: SchedPolicy, prio: c_int) !void {
-        var new_param: c.sched_param = .{ .sched_priority = prio };
-        const set_result = c.pthread_setschedparam(self_thread, policy.policy, &new_param);
-        if (set_result != 0) return error.FailedSettingThreadPolicy;
-    }
-};
+    else
+        null;

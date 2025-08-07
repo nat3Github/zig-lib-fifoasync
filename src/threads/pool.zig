@@ -299,8 +299,10 @@ fn worker_time_critical(pool: *Pool) void {
         std.log.err("{}", .{e});
         return;
     };
-    const current_info = prio.pthread.get_thread_scheduling(prio.pthread.get_current_thread() catch return) catch return;
-    std.log.warn("policy is now: {s} prio is now: {}", .{ current_info.policy.get_str(), current_info.priority });
+    if (comptime prio.supports_pthread()) {
+        const current_info = prio.pthread.get_thread_scheduling(prio.pthread.get_current_thread() catch return) catch return;
+        std.log.warn("policy is now: {s} prio is now: {}", .{ current_info.policy.get_str(), current_info.priority });
+    }
     pool.mutex.lock();
     defer pool.mutex.unlock();
 

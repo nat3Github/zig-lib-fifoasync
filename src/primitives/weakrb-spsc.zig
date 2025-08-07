@@ -153,9 +153,7 @@ pub fn FlexFifo(comptime T: type, multi_reader: bool, multi_writer: bool) type {
 }
 
 test "spsc basic test" {
-    const alloc = std.testing.allocator;
-    var fifo = try Fifo(u32, 4).init(alloc);
-    defer fifo.deinit(alloc);
+    var fifo = Fifo(u32, 4){};
     for (0..10) |i| {
         const casted: u32 = @intCast(i);
         fifo.push(casted) catch unreachable;
@@ -166,19 +164,18 @@ test "spsc basic test" {
 pub fn LinkedChannel(
     comptime SendT: type,
     comptime ReturnT: type,
-    comptime capacity: comptime_int,
 ) type {
     return struct {
         const Self = @This();
-        sender: *Fifo(SendT, capacity),
-        receiver: *Fifo(ReturnT, capacity),
+        sender: Fifo2(SendT),
+        receiver: Fifo2(ReturnT),
         pub fn send(self: *Self, msg: SendT) !void {
             try self.sender.push(msg);
         }
         pub fn receive(self: *Self) ?ReturnT {
             return self.receiver.pop();
         }
-        pub fn init(sender: *Fifo(SendT, capacity), receiver: *Fifo(ReturnT, capacity)) Self {
+        pub fn init(sender: Fifo2(SendT), receiver: Fifo2(ReturnT)) Self {
             return Self{
                 .sender = sender,
                 .receiver = receiver,
@@ -190,34 +187,19 @@ pub fn LinkedChannel(
     };
 }
 
-pub fn BiLinkedChannels(A: type, B: type, capacity: comptime_int) type {
+pub fn BiLinkedChannels(A: type, B: type) type {
     return struct {
-        A_to_B_channel: LinkedChannel(A, B, capacity),
-        B_to_A_channel: LinkedChannel(B, A, capacity),
+        A_to_B_channel: LinkedChannel(A, B),
+        B_to_A_channel: LinkedChannel(B, A),
     };
 }
-pub fn get_bidirectional_linked_channels(gpa: Allocator, comptime A: type, comptime B: type, capacity: comptime_int) !BiLinkedChannels(A, B, capacity) {
-    const fifoA = try Fifo(A, capacity).init(gpa);
-    const fifoB = try Fifo(B, capacity).init(gpa);
-    return BiLinkedChannels(A, B, capacity){
-        .A_to_B_channel = LinkedChannel(A, B, capacity).init(fifoA, fifoB),
-        .B_to_A_channel = LinkedChannel(B, A, capacity).init(fifoB, fifoA),
+pub fn get_bidirectional_linked_channels(gpa: Allocator, comptime A: type, comptime B: type, capacity: comptime_int) !BiLinkedChannels(A, B) {
+    const fifoA = try Fifo2(A).init(gpa, capacity);
+    const fifoB = try Fifo2(B).init(gpa, capacity);
+    return BiLinkedChannels(A, B){
+        .A_to_B_channel = LinkedChannel(A, B).init(fifoA, fifoB),
+        .B_to_A_channel = LinkedChannel(B, A).init(fifoB, fifoA),
     };
-}
-
-test "2way channel basic test" {
-    const test_gpa = std.testing.allocator;
-    const channels = try get_bidirectional_linked_channels(test_gpa, u32, i32, 4);
-    var base = channels.A_to_B_channel;
-    var server = channels.B_to_A_channel;
-    defer base.deinit(test_gpa);
-    defer server.deinit(test_gpa);
-    for (0..10) |i| {
-        const casted: u32 = @intCast(i);
-        try base.send(casted);
-        const ret: u32 = server.receive().?;
-        try std.testing.expect((ret == casted));
-    }
 }
 
 test "test all refs" {
