@@ -62,7 +62,7 @@ pub fn ASFunction(Fn: anytype) type {
             var t: u32 = 1;
             while (!self.result_ready()) {
                 self.re.timedWait(1_000_000_000) catch {
-                    std.debug.print("ASFunction: waiting for join ..{} s elapsed\n", t);
+                    std.debug.print("ASFunction: waiting for join ..{} s elapsed\n", .{t});
                     t += 1;
                 };
             }
