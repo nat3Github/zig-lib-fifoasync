@@ -6,7 +6,7 @@ const c = pthread: {
         break :pthread @cImport(@cInclude("pthread.h"));
     } else if (builtin.target.os.tag == .macos) {
         // Use the macOS-specific pthread.h
-        @cImport(@cInclude("../include/macOS/pthread/pthread.h"));
+        break :pthread @cImport(@cInclude("../include/macOS/pthread/pthread.h"));
     }
     break :pthread null; // or just import the correct header
 };
