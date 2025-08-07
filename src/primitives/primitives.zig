@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const root = @import("../root.zig");
 
 /// for safe use of from two threads (T is either available at the local thread or at the second thread)
 /// NOTE: when using a T which allocates you have to manually free that, this does not call deinit on T
@@ -104,4 +105,56 @@ pub fn yield_cpu() void {
 test "yield_cpu does not crash" {
     yield_cpu();
     std.debug.print("yield_cpu called successfully on {s}.\n", .{@tagName(builtin.target.cpu.arch)});
+}
+
+/// Shared ReadOnly Memory
+pub fn RefCounted(comptime T: type) type {
+    return struct {
+        data: T,
+        ref_count: std.atomic.Value(u64) = .init(1),
+        /// Initializes a new RefCounted instance.
+        /// The initial reference count is 1.
+        pub fn init(value: T) @This() {
+            return @This(){ .data = value };
+        }
+        /// Increments the reference count.
+        pub fn increment(self: *@This()) void {
+            _ = self.ref_count.fetchAdd(1, .seq_cst);
+        }
+        /// Decrements the reference count.
+        /// Returns true if the count reached zero (meaning the memory can be freed).
+        pub fn decrement(self: *@This()) bool {
+            return self.ref_count.fetchSub(1, .seq_cst) == 1;
+        }
+    };
+}
+
+/// A "smart pointer" wrapper for RefCounted data.
+pub fn RcRef(comptime T: type) type {
+    return struct {
+        ptr: ?*RefCounted(T),
+        pub fn init(allocator: std.mem.Allocator, value: T) !@This() {
+            const rc_data = try allocator.create(RefCounted(T));
+            rc_data.* = RefCounted(T).init(value);
+            return .{ .ptr = rc_data };
+        }
+        pub fn clone(rc_ptr: *RefCounted(T)) @This() {
+            rc_ptr.increment();
+            return .{ .ptr = rc_ptr };
+        }
+        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            if (self.ptr) |p| {
+                if (p.decrement()) {
+                    allocator.destroy(p);
+                }
+            }
+            self.ptr = null;
+        }
+        pub fn get(self: @This()) ?*const T {
+            if (self.ptr) |p| {
+                return p.get();
+            }
+            return null;
+        }
+    };
 }

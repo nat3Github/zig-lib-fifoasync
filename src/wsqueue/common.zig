@@ -49,27 +49,22 @@ pub fn ASFunction(Fn: anytype) type {
     return struct {
         const FnT = @TypeOf(Fn);
         const FnArg = arg_tuple_from_fn(FnT); //arg_tuple_from_fn_typeinfo(@typeInfo(FnT).@"fn");
-        const FnRet = @typeInfo(FnT).@"fn".return_type.?;
+        pub const ReturnType = @typeInfo(FnT).@"fn".return_type.?;
         const fnc: *const FnT = Fn;
 
         fnarg: FnArg = undefined,
-        fnret: FnRet = undefined,
+        fnret: ReturnType = undefined,
         state: Atomic(TaskState) = Atomic(TaskState).init(.default),
         re: std.Thread.ResetEvent = .{},
 
         pub fn join(self: *@This()) void {
             if (self.state.load(.acquire) == .unitialized) return;
-
-            if (!self.result_ready()) {
-                std.log.warn("wait", .{});
-                if (@import("builtin").mode == .Debug) {
-                    self.re.timedWait(100_000_000) catch {
-                        std.log.err("join failed after 100 ms", .{});
-                        return;
-                    };
-                } else {
-                    self.re.wait();
-                }
+            var t: u32 = 1;
+            while (!self.result_ready()) {
+                self.re.timedWait(1_000_000_000) catch {
+                    std.debug.print("ASFunction: waiting for join ..{} s elapsed\n", t);
+                    t += 1;
+                };
             }
             while (!self.result_ready()) {}
         }
@@ -107,7 +102,7 @@ pub fn ASFunction(Fn: anytype) type {
             return self.state.load(.acquire) == .finished;
         }
         /// threadsafe
-        pub inline fn result(self: *@This()) ?FnRet {
+        pub inline fn result(self: *@This()) ?ReturnType {
             if (self.result_ready()) return self.fnret else return null;
         }
         fn anyopaque_run(p: *anyopaque) void {

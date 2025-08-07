@@ -5,6 +5,7 @@ const root = @import("../root.zig");
 
 /// Single Producer Single Consumer Lockfree Queue Algorithm according to:
 /// https://www.irif.fr/~guatto/papers/sbac13.pdf WeakRB Algorithm
+/// lives on the stack
 pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
     return struct {
         const Self = @This();
@@ -12,21 +13,7 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
         cback: usize = 0,
         front: usize = 0,
         pfront: usize = 0,
-        data: []T,
-        /// allocates its data and itself on the heap (cant be stack local)
-        pub fn init(alloc: Allocator) !*Self {
-            const data = try alloc.alloc(T, capacity);
-            const this = try alloc.create(Self);
-            this.* = .{
-                .data = data,
-            };
-            return this;
-        }
-        /// cleans up all data allocated by This including the pointer to itself (dont use the pointer after this)
-        pub fn deinit(self: *Self, alloc: Allocator) void {
-            alloc.free(self.data);
-            alloc.destroy(self);
-        }
+        data: [capacity]T = undefined,
         pub fn push_slice(self: *Self, items: []const T) !void {
             const n = items.len;
             const b = @atomicLoad(usize, &self.back, .unordered);
