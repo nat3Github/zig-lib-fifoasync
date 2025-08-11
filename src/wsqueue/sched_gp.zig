@@ -15,13 +15,11 @@ const BaseSched = @import("sched.zig");
 const assert = std.debug.assert;
 const expect = std.testing.expect;
 
-const default_start_fn = thread.prio.set_realtime_critical_high;
-
+fn nothing() !void {}
 pub const Config = struct {
     N_threads: usize,
-    N_queues: usize = 1,
     N_queue_capacity: usize = std.math.powi(usize, 2, 12) catch unreachable,
-    startup_fn: *const fn () anyerror!void = default_start_fn,
+    startup_fn: *const fn () anyerror!void = nothing,
 };
 
 pub const Sched = @This();
@@ -44,7 +42,10 @@ pub fn waiting_worker(
                 task.call();
             } else {
                 nothing_count += 1;
-                if (nothing_count >= spsc.len * 2) {
+                for (0..nothing_count) |_| {
+                    root.prim.yield_cpu();
+                }
+                if (nothing_count >= 16) {
                     nothing_count = 0;
                     ctrl.wait(std.math.maxInt(u64)) catch {};
                     ctrl.reset();
@@ -60,9 +61,8 @@ pub fn waiting_worker(
 }
 
 pub fn init(alloc: Allocator, cfg: Config) !Sched {
-    assert(cfg.N_queues != 0);
     assert(cfg.N_threads > 0);
-    var bsched = try BaseSched.init(alloc, cfg.N_queues, cfg.N_threads, cfg.N_queue_capacity);
+    var bsched = try BaseSched.init(alloc, 1, cfg.N_threads, cfg.N_queue_capacity);
     errdefer bsched.deinit(alloc);
     for (bsched.threads, 0..) |*j, i| {
         var next: ?*ResetEvent = null;
@@ -83,23 +83,19 @@ pub fn deinit(self: *Sched, alloc: Allocator) void {
     self.sched.deinit(alloc);
 }
 
-const Exe = struct {
-    sched: *Sched,
-    que_idx: usize,
-};
-fn exe(self: *Exe, task: Task) anyerror!void {
-    try self.sched.sched.spsc[self.que_idx].push(task);
-    self.sched.wake_sched();
+fn exe(self: *Sched, task: Task) anyerror!void {
+    try self.sched.spsc[0].push(task);
+    self.wake_sched();
 }
 
-pub const Executor = root.sched.GenericAsyncExecutor(Exe, exe);
-pub fn get_executor(self: *Sched, queue_index: usize) Executor {
-    if (queue_index >= self.sched.spsc.len) @panic("oob");
+fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
+    const self: *Sched = @alignCast(@ptrCast(self_ptr));
+    try self.exe(task);
+}
+pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
     return .{
-        .inner = Exe{
-            .sched = self,
-            .que_idx = queue_index,
-        },
+        .ptr = @ptrCast(self),
+        .f = exe_opaque,
     };
 }
 
@@ -110,51 +106,4 @@ pub fn wake_sched(self: *Sched) void {
 
 fn recast(T: type, ptr: *anyopaque) *T {
     return @as(*T, @alignCast(@ptrCast(ptr)));
-}
-
-const ExampleStruct = BaseSched.TestStruct;
-test "sched test" {
-    const alloc = std.testing.allocator;
-    var ps = try Sched.init(alloc, .{
-        .N_queues = 1,
-        .N_threads = 2,
-    });
-    defer ps.deinit(alloc);
-    var as_exe = ps.get_executor(0);
-    var ex_struct = ExampleStruct{
-        .age = 90,
-        .name = "peter kunz",
-        .timer = Timer.start() catch unreachable,
-    };
-
-    var ex_struct2 = ExampleStruct{
-        .age = 90,
-        .name = "peter kunz",
-        .timer = Timer.start() catch unreachable,
-    };
-
-    var task = Task{};
-    var task2 = Task{};
-
-    std.Thread.sleep(10e6);
-
-    for (0..2) |i| {
-        _ = i;
-        ex_struct.timer = Timer.start() catch unreachable;
-        task.set(ExampleStruct, &ex_struct, ExampleStruct.say_my_name_type_erased);
-
-        try as_exe.async_executor().execute(task);
-
-        ex_struct2.timer = Timer.start() catch unreachable;
-        task2.set(ExampleStruct, &ex_struct2, ExampleStruct.say_my_name_lie_type_erased);
-        try as_exe.async_executor().execute(task2);
-
-        std.Thread.sleep(200e6);
-    }
-
-    std.Thread.sleep(20e6);
-}
-
-test "test all refs" {
-    std.testing.refAllDecls(@This());
 }

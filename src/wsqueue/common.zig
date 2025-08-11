@@ -35,10 +35,9 @@ fn arg_tuple_from_fn(comptime f: type) type {
 }
 
 const TaskState = enum(u8) {
-    const default: TaskState = .unitialized;
-    unitialized,
-    running,
-    finished,
+    none,
+    busy,
+    has_result,
 };
 
 /// stores fn args and return data and wires a Task
@@ -54,26 +53,26 @@ pub fn ASFunction(Fn: anytype) type {
 
         fnarg: FnArg = undefined,
         fnret: ReturnType = undefined,
-        state: Atomic(TaskState) = Atomic(TaskState).init(.default),
+        state: Atomic(TaskState) = Atomic(TaskState).init(.none),
         re: std.Thread.ResetEvent = .{},
 
         pub fn join(self: *@This()) void {
-            if (self.state.load(.acquire) == .unitialized) return;
+            if (self.state.load(.acquire) == .none) return;
             var t: u32 = 1;
-            while (!self.result_ready()) {
+            while (!self.has_result()) {
                 self.re.timedWait(1_000_000_000) catch {
                     std.debug.print("ASFunction: waiting for join ..{} s elapsed\n", .{t});
                     t += 1;
                 };
             }
-            while (!self.result_ready()) {}
+            while (!self.has_result()) {}
         }
         /// NOTE the Memory of *@This() must remain well defined till the task has finished !!!
         /// threadsafe
         pub inline fn call(self: *@This(), args: FnArg, async_executor: anytype) !void {
             if (self.is_running()) return error.TaskIsBusy;
             self.fnarg = args;
-            self.state.store(.running, .release);
+            self.state.store(.busy, .release);
             self.re.reset();
             var task = Task{};
             task.set(@This(), self, anyopaque_run);
@@ -93,23 +92,30 @@ pub fn ASFunction(Fn: anytype) type {
                 },
             }
         }
+        inline fn task_state(self: *@This()) TaskState {
+            return self.state.load(.acquire);
+        }
         /// threadsafe
         pub inline fn is_running(self: *@This()) bool {
-            return self.state.load(.acquire) == .running;
+            return self.state.load(.acquire) == .busy;
         }
         /// threadsafe
-        inline fn result_ready(self: *@This()) bool {
-            return self.state.load(.acquire) == .finished;
+        inline fn has_result(self: *@This()) bool {
+            return self.state.load(.acquire) == .has_result;
         }
         /// threadsafe
+        /// note: you can only handle a result once repeated calls will return null
         pub inline fn result(self: *@This()) ?ReturnType {
-            if (self.result_ready()) return self.fnret else return null;
+            if (!self.has_result()) return null;
+            const res = self.fnret;
+            self.state.store(.none, .release);
+            return res;
         }
         fn anyopaque_run(p: *anyopaque) void {
             const self: *@This() = @alignCast(@ptrCast(p));
             self.fnret = @call(.auto, @This().fnc, self.fnarg);
             self.re.set();
-            self.state.store(.finished, .release);
+            self.state.store(.has_result, .release);
         }
     };
 }

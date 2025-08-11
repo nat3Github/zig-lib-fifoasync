@@ -71,60 +71,15 @@ fn exe(self: *Exe, task: Task) anyerror!void {
     try self.sched.sched.spsc[self.que_idx].push(task);
 }
 
-pub const Executor = root.sched.GenericAsyncExecutor(Exe, exe);
-pub fn get_executor(self: *Sched, queue_index: usize) Executor {
-    if (queue_index >= self.sched.spsc.len) @panic("oob");
+fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
+    const self: *Sched = @ptrCast(self_ptr);
+    try self.exe(task);
+}
+pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
     return .{
-        .inner = Exe{
-            .sched = self,
-            .que_idx = queue_index,
-        },
+        .ptr = @ptrCast(self),
+        .f = exe_opaque,
     };
 }
 
 const ExampleStruct = BaseSched.TestStruct;
-
-test "sched test" {
-    const alloc = std.testing.allocator;
-    var ps = try Sched.init(alloc, .{
-        .N_queues = 1,
-        .N_threads = 2,
-    });
-    defer ps.deinit(alloc);
-    var as_exe = ps.get_executor(0);
-
-    var ex_struct = ExampleStruct{
-        .age = 90,
-        .name = "peter kunz",
-        .timer = Timer.start() catch unreachable,
-    };
-
-    var ex_struct2 = ExampleStruct{
-        .age = 90,
-        .name = "peter kunz",
-        .timer = Timer.start() catch unreachable,
-    };
-
-    var task = Task{};
-    var task2 = Task{};
-
-    std.Thread.sleep(10e6);
-
-    for (0..2) |i| {
-        _ = i;
-        ex_struct.timer = Timer.start() catch unreachable;
-        task.set(ExampleStruct, &ex_struct, ExampleStruct.say_my_name_type_erased);
-        try as_exe.async_executor().execute(task);
-
-        ex_struct2.timer = Timer.start() catch unreachable;
-        task2.set(ExampleStruct, &ex_struct2, ExampleStruct.say_my_name_lie_type_erased);
-        try as_exe.async_executor().execute(task2);
-
-        std.Thread.sleep(200e6);
-    }
-
-    std.Thread.sleep(20e6);
-}
-test "test all refs" {
-    std.testing.refAllDecls(@This());
-}

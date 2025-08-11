@@ -7,8 +7,10 @@ const Atomic = atomic.AcqRelAtomic;
 
 const ResetEvent = std.Thread.ResetEvent;
 pub const prio = @import("thread_prio.zig");
+pub const sleep = @import("timer.zig");
 test "prio" {
     _ = prio;
+    _ = sleep;
 }
 
 pub const Signal = enum(u8) {

@@ -2,13 +2,11 @@ const std = @import("std");
 const assert = std.debug.assert;
 const c = pthread: {
     if (builtin.target.os.tag == .linux) {
-        // Use the Linux-specific pthread.h
         break :pthread @cImport(@cInclude("pthread.h"));
     } else if (builtin.target.os.tag == .macos) {
-        // Use the macOS-specific pthread.h
         break :pthread @cImport(@cInclude("../include/macOS/pthread/pthread.h"));
     }
-    break :pthread null; // or just import the correct header
+    break :pthread null;
 };
 
 const win32 = @import("win32");
@@ -56,7 +54,7 @@ pub fn supports_pthread() bool {
 
 pub fn set_realtime_critical_highest() !void {
     if (comptime supports_pthread()) {
-        try pthread.set_prio(.Fifo, 0.9);
+        try pthread.set_prio(.Fifo, 1);
     } else if (builtin.target.os.tag == .windows) {
         try win32thread.set_thread_prio(.PRIORITY_TIME_CRITICAL);
     }

@@ -20,6 +20,7 @@ pub const sched = struct {
 };
 pub const util = struct {
     pub const atomic = @import("util/atomic.zig");
+    pub const fibonacci = @import("util/fibonacci.zig");
 };
 
 pub const stats = @import("util/statistics.zig");
