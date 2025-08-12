@@ -87,7 +87,7 @@ pub const Spinlock = struct {
     }
 };
 
-/// @brief Yields the CPU to improve efficiency in busy-wait loops.
+/// Yields the CPU to improve efficiency in busy-wait loops.
 /// On x86, this emits the `pause` instruction.
 /// On ARM64, this emits the `yield` instruction.
 /// For other architectures, it currently does nothing.

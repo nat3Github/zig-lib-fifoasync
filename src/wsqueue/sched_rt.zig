@@ -18,9 +18,9 @@ const expect = std.testing.expect;
 const default_start_fn = thread.prio.set_realtime_critical_highest;
 pub const Config = struct {
     N_threads: usize,
-    N_queues: usize = 1,
     N_queue_capacity: usize = std.math.powi(usize, 2, 12) catch unreachable,
     startup_fn: *const fn () anyerror!void = default_start_fn,
+    sleep_ns: u64 = 250,
 };
 
 pub const Sched = @This();
@@ -31,25 +31,27 @@ pub fn polling_worker(
     ctrl: thread.ThreadStatus,
     spsc: []BaseSched.SPSC,
     start_up_fn: anytype,
+    sleep_ns: u64,
 ) !void {
+    var t = root.thread.sleep.Timer.init() catch return;
     try start_up_fn();
     while (ctrl.signal.load() != .stop_signal) {
         for (spsc) |*q| {
-            const pop = q.pop();
-            if (pop) |task| task.call();
+            while (q.pop()) |task| {
+                task.call();
+                if (ctrl.signal.load() == .stop_signal) return;
+            }
         }
+        t.rt_sleep(sleep_ns);
     }
 }
 
 pub fn init(alloc: Allocator, cfg: Config) !Sched {
-    assert(cfg.N_queues != 0);
     assert(cfg.N_threads > 0);
-    var bsched = try BaseSched.init(alloc, cfg.N_queues, cfg.N_threads, cfg.N_queue_capacity);
+    var bsched = try BaseSched.init(alloc, 1, cfg.N_threads, cfg.N_queue_capacity);
     errdefer bsched.deinit(alloc);
     for (bsched.threads, 0..) |*j, i| {
-        j.spawn(alloc, "RT task thread {}", .{i + 1}, polling_worker, .{
-            bsched.spsc, cfg.startup_fn,
-        }) catch unreachable;
+        j.spawn(alloc, "RT task thread {}", .{i + 1}, polling_worker, .{ bsched.spsc, cfg.startup_fn, cfg.sleep_ns }) catch unreachable;
     }
     return Sched{
         .sched = bsched,
@@ -63,16 +65,12 @@ pub fn deinit(self: *Sched, alloc: Allocator) void {
     self.sched.deinit(alloc);
 }
 
-const Exe = struct {
-    sched: *Sched,
-    que_idx: usize,
-};
-fn exe(self: *Exe, task: Task) anyerror!void {
-    try self.sched.sched.spsc[self.que_idx].push(task);
+fn exe(self: *Sched, task: Task) anyerror!void {
+    try self.sched.spsc[0].push(task);
 }
 
 fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
-    const self: *Sched = @ptrCast(self_ptr);
+    const self: *Sched = @alignCast(@ptrCast(self_ptr));
     try self.exe(task);
 }
 pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {

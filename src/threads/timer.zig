@@ -154,7 +154,7 @@ pub const MacosTimer = struct {
 pub const WinTimer = struct {
     h_timer: os.windows.HANDLE,
 
-    pub fn init() !@This() {
+    pub fn init() Error!@This() {
         const h_timer = win.CreateWaitableTimerExW(
             null,
             null,
