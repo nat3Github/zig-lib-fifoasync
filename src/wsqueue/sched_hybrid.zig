@@ -1,5 +1,7 @@
-/// - simple polling scheduler
+/// - scheduler using polling and notification
 /// - can use high priority threads
+/// - only one thread is polling
+/// - do not move this data structure after initialization
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ResetEvent = std.Thread.ResetEvent;
@@ -10,7 +12,7 @@ const Spinlock = root.prim.Spinlock;
 const Timer = std.time.Timer;
 const Atomic = root.util.atomic.AcqRelAtomic;
 
-const BaseSched = @import("base_sched.zig");
+const SchedGP = @import("sched_gp.zig");
 
 const assert = std.debug.assert;
 const expect = std.testing.expect;
@@ -25,48 +27,57 @@ pub const Config = struct {
 
 pub const Sched = @This();
 
-sched: BaseSched,
+sched_gp: SchedGP = undefined,
+polling_thread: root.thread.ThreadControl = undefined,
 
-pub fn polling_worker(
+pub fn hybrid_poller(
     ctrl: thread.ThreadStatus,
-    spsc: []BaseSched.Fifo,
+    spsc: []SchedGP.Fifo,
     start_up_fn: anytype,
     sleep_ns: u64,
+    sched_gp: *SchedGP,
 ) !void {
     var t = root.thread.sleep.Timer.init() catch return;
     try start_up_fn();
+    var is_awake: bool = false;
     while (ctrl.signal.load() != .stop_signal) {
-        for (spsc) |*q| {
-            while (q.pop()) |task| {
-                task.call();
-                if (ctrl.signal.load() == .stop_signal) return;
+        const q = &spsc[0];
+        while (q.pop()) |task| {
+            if (!is_awake) {
+                is_awake = true;
+                sched_gp.wake_sched();
             }
+            task.call();
+            if (ctrl.signal.load() == .stop_signal) return;
         }
+        is_awake = false;
         t.rt_sleep(sleep_ns);
     }
 }
 
-pub fn init(alloc: Allocator, cfg: Config) !Sched {
+/// - do not move this data structure after initialization
+pub fn init(self: *Sched, alloc: Allocator, cfg: Config) !void {
     assert(cfg.N_threads > 0);
-    var bsched = try BaseSched.init(alloc, 1, cfg.N_threads, cfg.N_queue_capacity);
-    errdefer bsched.deinit(alloc);
-    for (bsched.threads, 0..) |*j, i| {
-        j.spawn(alloc, "RT task thread {}", .{i + 1}, polling_worker, .{ bsched.spsc, cfg.startup_fn, cfg.sleep_ns }) catch unreachable;
-    }
-    return Sched{
-        .sched = bsched,
-    };
+
+    self.sched_gp = try SchedGP.init(alloc, .{
+        .N_queue_capacity = cfg.N_queue_capacity,
+        .N_threads = cfg.N_threads - 1,
+        .startup_fn = cfg.startup_fn,
+    });
+    errdefer self.sched_gp.deinit(alloc);
+    try self.polling_thread.spawn(alloc, "hybrid sched polling thread", .{}, hybrid_poller, .{
+        self.sched_gp.sched.spsc, cfg.startup_fn, cfg.sleep_ns, &self.sched_gp,
+    });
+    errdefer self.polling_thread.join(alloc);
 }
 
 pub fn deinit(self: *Sched, alloc: Allocator) void {
-    for (self.sched.threads) |*j| {
-        j.join(alloc);
-    }
-    self.sched.deinit(alloc);
+    self.polling_thread.join(alloc);
+    self.sched_gp.deinit(alloc);
 }
 
 fn exe(self: *Sched, task: Task) anyerror!void {
-    try self.sched.push(0, task);
+    try self.sched_gp.sched.push(0, task);
 }
 
 fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
@@ -79,5 +90,3 @@ pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
         .f = exe_opaque,
     };
 }
-
-const ExampleStruct = BaseSched.TestStruct;

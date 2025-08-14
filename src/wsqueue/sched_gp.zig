@@ -1,5 +1,5 @@
-/// simple sched using high priority threads and condition variables
-/// uses spsc queues
+/// - simple scheduler using notification with resetEvents
+/// - can use high priority threads
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ResetEvent = std.Thread.ResetEvent;
@@ -10,7 +10,8 @@ const Spinlock = root.prim.Spinlock;
 const Timer = std.time.Timer;
 const Atomic = root.util.atomic.AcqRelAtomic;
 
-const BaseSched = @import("sched.zig");
+const BaseSched = @import("base_sched.zig");
+pub const Fifo = BaseSched.Fifo;
 
 const assert = std.debug.assert;
 const expect = std.testing.expect;
@@ -28,7 +29,7 @@ sched: BaseSched,
 
 pub fn waiting_worker(
     ctrl: thread.ThreadStatus,
-    spsc: []BaseSched.SPSC,
+    spsc: []BaseSched.Fifo,
     start_up_fn: anytype,
     wakeup_next: ?*ResetEvent,
 ) !void {
@@ -84,7 +85,7 @@ pub fn deinit(self: *Sched, alloc: Allocator) void {
 }
 
 fn exe(self: *Sched, task: Task) anyerror!void {
-    try self.sched.spsc[0].push(task);
+    try self.sched.push(0, task);
     self.wake_sched();
 }
 

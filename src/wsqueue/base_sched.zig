@@ -10,16 +10,16 @@ const assert = std.debug.assert;
 const expect = std.testing.expect;
 
 pub const Sched = @This();
-pub const SPSC = root.spsc.FlexFifo(Task, true, true);
+pub const Fifo = root.spsc.FlexFifo(Task, true, true);
 
 threads: []ThreadControl,
-spsc: []SPSC,
+spsc: []Fifo,
 
 pub fn init(alloc: Allocator, queues: usize, threads: usize, spsc_capacity: usize) !Sched {
-    const spsc: []SPSC = try alloc.alloc(SPSC, queues);
+    const spsc: []Fifo = try alloc.alloc(Fifo, queues);
     errdefer alloc.free(spsc);
     for (spsc) |*j| {
-        const q = try SPSC.init(alloc, spsc_capacity);
+        const q = try Fifo.init(alloc, spsc_capacity);
         errdefer q.deinit(alloc);
         j.* = q;
     }
@@ -40,6 +40,10 @@ pub fn deinit(self: *Sched, alloc: Allocator) void {
     }
     defer alloc.free(self.spsc);
     defer alloc.free(self.threads);
+}
+
+pub fn push(self: *Sched, que: usize, t: Task) !void {
+    try self.spsc[que].push(t);
 }
 
 pub const TestStruct = struct {

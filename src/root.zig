@@ -10,6 +10,7 @@ pub const sched = struct {
     pub const ASFunction = common.ASFunction;
     pub const RealtimeSched = @import("wsqueue/sched_rt.zig");
     pub const DefaultSched = @import("wsqueue/sched_gp.zig");
+    pub const HybridSched = @import("wsqueue/sched_hybrid.zig");
     test "test sched submodules" {
         _ = .{
             common,
