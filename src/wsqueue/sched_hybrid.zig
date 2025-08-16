@@ -28,7 +28,7 @@ pub const Config = struct {
 pub const Sched = @This();
 
 sched_gp: SchedGP = undefined,
-polling_thread: root.thread.ThreadControl = undefined,
+polling_thread: root.thread.ThreadControl = .{},
 
 pub fn hybrid_poller(
     ctrl: thread.ThreadStatus,
@@ -57,6 +57,7 @@ pub fn hybrid_poller(
 
 /// - do not move this data structure after initialization
 pub fn init(self: *Sched, alloc: Allocator, cfg: Config) !void {
+    self.* = Sched{};
     assert(cfg.N_threads > 0);
 
     self.sched_gp = try SchedGP.init(alloc, .{
