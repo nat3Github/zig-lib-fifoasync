@@ -61,7 +61,7 @@ pub fn OneAccessToT(T: type) type {
 /// aka if (mtx.try_lock) { // proceed to use the variables on the realtime thread }
 /// NOTE: a lock is for synchronization and often compromises composability of functions, synchronization is best left to the end user because as he views the circumstances!
 pub const Spinlock = struct {
-    mtx: std.Thread.Mutex = .{},
+    mtx: std.Thread.Mutex align(root.cpu_cache_line) = .{},
     pub fn lock(self: *Spinlock) void {
         for (0..64) |_| {
             if (self.mtx.tryLock()) return;

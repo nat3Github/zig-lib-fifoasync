@@ -65,12 +65,13 @@ pub fn Fifo(comptime T: type, comptime capacity: comptime_int) type {
 pub fn Fifo2(comptime T: type) type {
     return struct {
         const Self = @This();
-        capacity: usize,
-        back: usize = 0,
+        back: usize align(root.cpu_cache_line) = 0,
         cback: usize = 0,
-        front: usize = 0,
         pfront: usize = 0,
+        front: usize align(root.cpu_cache_line) = 0,
         data: []T,
+        capacity: usize,
+
         pub fn init(alloc: Allocator, capacity: usize) !Self {
             const data = try alloc.alloc(T, capacity);
             return Self{
@@ -122,7 +123,7 @@ pub fn Fifo2(comptime T: type) type {
         }
     };
 }
-pub fn FlexFifo(comptime T: type, multi_reader: bool, multi_writer: bool) type {
+pub fn FlexFifo(comptime T: type, multi_reader: bool, multi_writer: bool) align(root.cpu_cache_line) type {
     return struct {
         fifo: Fifo2(T),
         reader_lock: root.prim.Spinlock = .{},

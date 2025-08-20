@@ -1,3 +1,6 @@
+const builtin = @import("builtin");
+const std = @import("std");
+
 pub const prim = @import("primitives/primitives.zig");
 pub const spsc = @import("primitives/weakrb-spsc.zig");
 pub const thread = @import("threads/thread.zig");
@@ -35,3 +38,5 @@ test "test all refs" {
         sched,
     };
 }
+
+pub const cpu_cache_line = std.atomic.cacheLineForCpu(builtin.target.cpu);
