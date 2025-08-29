@@ -10,28 +10,52 @@ const AtomicOrder = std.builtin.AtomicOrder;
 
 const Type = std.builtin.Type;
 
+const Cancelled = error{Cancelled};
+const common = @This();
+
+pub const TaskContext = struct {
+    pub const Cancelled = common.Cancelled;
+    ptr: *anyopaque = undefined,
+    yield_fn: ?*const fn (*anyopaque) TaskContext.Cancelled!void = null,
+    pub fn yield(self: *const @This()) TaskContext.Cancelled!void {
+        try self.yield_fn(self.ptr);
+    }
+};
+
 /// Generic type erased Task
 /// if arguments or return values are needed they must be somehow stored in the instance
+///
+/// its easier to use `ASFunction` which is a helpful wrapper for Task
 pub const Task = struct {
+    pub const Context = TaskContext;
     const This = @This();
     instance: ?*anyopaque = null,
-    task: ?*const fn (*anyopaque) void = null,
+    task: ?*const fn (*anyopaque, Context) void = null,
     /// the t_fn must re-cast the *anyopaque pointer to *T
-    pub fn set(self: *This, T: type, t_ptr: *T, t_fn: *const fn (*anyopaque) void) void {
+    pub fn set(self: *This, T: type, t_ptr: *T, t_fn: *const fn (*anyopaque, Context) void) void {
         const cast: *anyopaque = @ptrCast(t_ptr);
         self.instance = cast;
         self.task = t_fn;
     }
-    pub fn call(self: This) void {
+    pub fn call(self: This, task_ctx: Context) void {
         if (self.instance) |inst| {
-            @call(.auto, self.task.?, .{inst});
+            @call(.auto, self.task.?, .{ inst, task_ctx });
         }
     }
 };
 
-fn arg_tuple_from_fn(comptime f: type) type {
-    assert(comptime @typeInfo(f).@"fn".calling_convention != .@"inline");
-    return std.meta.ArgsTuple(f);
+/// filters Task.Context from a Argument Tuple if its in first place
+fn filtered_arg_tuple(comptime T: type) type {
+    comptime {
+        const t = @typeInfo(T).@"struct";
+        const len = t.fields.len;
+        if (len == 0) return T;
+        var x: [len]type = undefined;
+        for (t.fields, &x) |f, *y| y.* = f.type;
+        if (x[0] == TaskContext) {
+            return std.meta.Tuple(x[1..]);
+        } else return std.meta.Tuple(x[0..]);
+    }
 }
 
 const TaskState = enum(u8) {
@@ -44,14 +68,19 @@ const TaskState = enum(u8) {
 /// to the fn that can be executed by an async executor by calling Task.call()
 /// make sure the memory is defined for the duration of the async call!
 /// call join to wait for the end of the task!
+///
+/// you can use Task.Context for cooperative yielding and cancelation
+/// (will only have an effect if its supported by the AsyncExecutor)
+/// in your fn take Task.Context as first argument and call yield() to segregate a long function
 pub fn ASFunction(Fn: anytype) type {
+    const FnT = @TypeOf(Fn);
+    const FnArgs = filtered_arg_tuple(std.meta.ArgsTuple(FnT));
+    comptime if (@typeInfo(FnT).@"fn".calling_convention == .@"inline") @panic("inlined functions do not work with ASFunction, please use a normal fn!");
     return struct {
-        const FnT = @TypeOf(Fn);
-        const FnArg = arg_tuple_from_fn(FnT); //arg_tuple_from_fn_typeinfo(@typeInfo(FnT).@"fn");
         pub const ReturnType = @typeInfo(FnT).@"fn".return_type.?;
         const fnc: *const FnT = Fn;
 
-        fnarg: FnArg = undefined,
+        fnarg: FnArgs = undefined,
         fnret: ReturnType = undefined,
         state: Atomic(TaskState) = Atomic(TaskState).init(.none),
         re: std.Thread.ResetEvent = .{},
@@ -69,7 +98,7 @@ pub fn ASFunction(Fn: anytype) type {
         }
         /// NOTE the Memory of *@This() must remain well defined till the task has finished !!!
         /// threadsafe
-        pub inline fn call(self: *@This(), args: FnArg, async_executor: anytype) !void {
+        pub inline fn call(self: *@This(), args: FnArgs, async_executor: anytype) !void {
             if (self.is_running()) return error.TaskIsBusy;
             self.fnarg = args;
             self.state.store(.busy, .release);
@@ -111,9 +140,13 @@ pub fn ASFunction(Fn: anytype) type {
             self.state.store(.none, .release);
             return res;
         }
-        fn anyopaque_run(p: *anyopaque) void {
+        fn anyopaque_run(p: *anyopaque, task_ctx: Task.Context) void {
             const self: *@This() = @alignCast(@ptrCast(p));
-            self.fnret = @call(.auto, @This().fnc, self.fnarg);
+            if (comptime @typeInfo(FnArgs).@"struct".fields.len != @typeInfo(FnT).@"fn".params.len) {
+                self.fnret = @call(.auto, @This().fnc, .{task_ctx} ++ self.fnarg);
+            } else {
+                self.fnret = @call(.auto, @This().fnc, self.fnarg);
+            }
             self.re.set();
             self.state.store(.has_result, .release);
         }
@@ -139,19 +172,3 @@ pub const AsyncExecutor = struct {
         };
     }
 };
-
-pub fn GenericAsyncExecutor(T: type, f_exe: *const fn (*T, Task) anyerror!void) type {
-    return struct {
-        inner: T,
-        const This = @This();
-        pub fn async_executor(self: *@This()) AsyncExecutor {
-            const m = struct {
-                fn any_exe(ptr: *anyopaque, task: Task) anyerror!void {
-                    const this: *This = @alignCast(@ptrCast(ptr));
-                    return f_exe(&this.inner, task);
-                }
-            };
-            return root.sched.AsyncExecutor{ .ptr = self, .f = m.any_exe };
-        }
-    };
-}

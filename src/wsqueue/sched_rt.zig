@@ -25,20 +25,20 @@ pub const Config = struct {
 
 pub const Sched = @This();
 
-sched: BaseSched,
+sched: BaseSched = .{},
 
 pub fn polling_worker(
     ctrl: thread.ThreadStatus,
-    spsc: []BaseSched.Fifo,
+    self: *@This(),
     start_up_fn: anytype,
     sleep_ns: u64,
 ) !void {
-    var t = root.thread.sleep.Timer.init() catch return;
+    var t = root.thread.Timer.init() catch return;
     try start_up_fn();
     while (ctrl.signal.load() != .stop_signal) {
-        for (spsc) |*q| {
+        for (self.sched.spsc) |*q| {
             while (q.pop()) |task| {
-                task.call();
+                task.call(.{});
                 if (ctrl.signal.load() == .stop_signal) return;
             }
         }
@@ -46,16 +46,14 @@ pub fn polling_worker(
     }
 }
 
-pub fn init(alloc: Allocator, cfg: Config) !Sched {
+pub fn init(self: *@This(), alloc: Allocator, cfg: Config) !void {
     assert(cfg.N_threads > 0);
-    var bsched = try BaseSched.init(alloc, 1, cfg.N_threads, cfg.N_queue_capacity);
-    errdefer bsched.deinit(alloc);
-    for (bsched.threads, 0..) |*j, i| {
-        j.spawn(alloc, "RT task thread {}", .{i + 1}, polling_worker, .{ bsched.spsc, cfg.startup_fn, cfg.sleep_ns }) catch unreachable;
+    self.* = .{};
+    try self.sched.init(alloc, 1, cfg.N_threads, cfg.N_queue_capacity);
+    errdefer self.sched.deinit(alloc);
+    for (self.sched.threads, 0..) |*j, i| {
+        j.spawn(alloc, "RT task thread {}", .{i + 1}, polling_worker, .{ self, cfg.startup_fn, cfg.sleep_ns }) catch unreachable;
     }
-    return Sched{
-        .sched = bsched,
-    };
 }
 
 pub fn deinit(self: *Sched, alloc: Allocator) void {

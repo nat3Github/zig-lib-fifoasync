@@ -1,25 +1,25 @@
-// auto gen code
-// const struct_mod = b.addModule("examplestruct", .{ .root_source_file = b.path("test/some_struct.zig") });
-// const src_generator = b.addExecutable(.{
-//     .name = "dev-src-gen",
-//     .root_source_file = b.path("tools/src_generator.zig"),
-//     .target = target,
-//     .optimize = .Debug,
-// });
-
-// src_generator.root_module.addImport("fifoasync", fifoasync_module);
-// src_generator.root_module.addImport("examplestruct", struct_mod);
-// const src_generator_run = b.addRunArtifact(src_generator);
-
-// const generated_zig = src_generator_run.addOutputFileArg("delegator.zig");
-// const auto_generated_mod = b.addModule("delegator", .{ .root_source_file = generated_zig });
-// auto_generated_mod.addImport("examplestruct", struct_mod);
 const std = @import("std");
+const update = @import("update_tool");
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const test_step = b.step("test", "Run unit tests");
+    if (update.updateDependencies(b, &.{
+        .{
+            .branch = "main",
+            .url = "https://github.com/nat3Github/zig-lib-update",
+        },
+        .{
+            // win32
+            .url = "https://github.com/marlersoft/zigwin32",
+            .branch = "main",
+        },
+    }, .{
+        .name = "update",
+        .optimize = optimize,
+        .target = target,
+    })) return;
 
     const fifoasync_module = b.addModule("fifoasync", .{
         .root_source_file = b.path("src/root.zig"),
@@ -33,11 +33,7 @@ pub fn build(b: *std.Build) !void {
 
     fifoasync_module.addIncludePath(b.path("src/include/"));
 
-    const fifoasync_test = b.addTest(.{
-        .root_module = fifoasync_module,
-        .target = target,
-        .optimize = optimize,
-    });
-    const lib_test_run = b.addRunArtifact(fifoasync_test);
-    test_step.dependOn(&lib_test_run.step);
+    try update.addTestFolder(b, "tests", optimize, target, &.{
+        .{ .name = "fifoasync", .mod = fifoasync_module },
+    }, "test");
 }

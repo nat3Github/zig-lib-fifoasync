@@ -12,26 +12,20 @@ const expect = std.testing.expect;
 pub const Sched = @This();
 pub const Fifo = root.spsc.FlexFifo(Task, true, true);
 
-threads: []ThreadControl,
-spsc: []Fifo,
+threads: []ThreadControl = &.{},
+spsc: []Fifo = &.{},
 
-pub fn init(alloc: Allocator, queues: usize, threads: usize, spsc_capacity: usize) !Sched {
-    const spsc: []Fifo = try alloc.alloc(Fifo, queues);
-    errdefer alloc.free(spsc);
-    for (spsc) |*j| {
+pub fn init(self: *Sched, alloc: Allocator, queues: usize, threads: usize, spsc_capacity: usize) !void {
+    self.spsc = try alloc.alloc(Fifo, queues);
+    errdefer alloc.free(self.spsc);
+    for (self.spsc) |*j| {
         const q = try Fifo.init(alloc, spsc_capacity);
         errdefer q.deinit(alloc);
         j.* = q;
     }
-
-    const wthandle: []ThreadControl = try alloc.alloc(ThreadControl, threads);
-    errdefer alloc.free(wthandle);
-    for (wthandle) |*w| w.* = ThreadControl{};
-
-    return Sched{
-        .spsc = spsc,
-        .threads = wthandle,
-    };
+    self.threads = try alloc.alloc(ThreadControl, threads);
+    errdefer alloc.free(self.threads);
+    for (self.threads) |*w| w.* = ThreadControl{};
 }
 
 pub fn deinit(self: *Sched, alloc: Allocator) void {

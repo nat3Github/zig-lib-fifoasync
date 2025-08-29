@@ -37,7 +37,7 @@ pub fn hybrid_poller(
     sleep_ns: u64,
     sched_gp: *SchedGP,
 ) !void {
-    var t = root.thread.sleep.Timer.init() catch return;
+    var t = root.thread.Timer.init() catch return;
     try start_up_fn();
     var is_awake: bool = false;
     while (ctrl.signal.load() != .stop_signal) {
@@ -47,7 +47,7 @@ pub fn hybrid_poller(
                 is_awake = true;
                 sched_gp.wake_sched();
             }
-            task.call();
+            task.call(.{});
             if (ctrl.signal.load() == .stop_signal) return;
         }
         is_awake = false;
@@ -59,8 +59,7 @@ pub fn hybrid_poller(
 pub fn init(self: *Sched, alloc: Allocator, cfg: Config) !void {
     self.* = Sched{};
     assert(cfg.N_threads > 0);
-
-    self.sched_gp = try SchedGP.init(alloc, .{
+    try self.sched_gp.init(alloc, .{
         .N_queue_capacity = cfg.N_queue_capacity,
         .N_threads = cfg.N_threads - 1,
         .startup_fn = cfg.startup_fn,

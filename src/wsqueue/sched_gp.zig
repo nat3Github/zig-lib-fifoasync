@@ -25,7 +25,7 @@ pub const Config = struct {
 
 pub const Sched = @This();
 
-sched: BaseSched,
+sched: BaseSched = .{},
 
 pub fn waiting_worker(
     ctrl: thread.ThreadStatus,
@@ -40,7 +40,7 @@ pub fn waiting_worker(
             const pop = q.pop();
             if (pop) |task| {
                 nothing_count = 0;
-                task.call();
+                task.call(.{});
             } else {
                 nothing_count += 1;
                 for (0..nothing_count) |_| {
@@ -61,22 +61,21 @@ pub fn waiting_worker(
     }
 }
 
-pub fn init(alloc: Allocator, cfg: Config) !Sched {
+pub fn init(self: *@This(), alloc: Allocator, cfg: Config) !void {
+    self.* = .{};
     assert(cfg.N_threads > 0);
-    var bsched = try BaseSched.init(alloc, 1, cfg.N_threads, cfg.N_queue_capacity);
-    errdefer bsched.deinit(alloc);
-    for (bsched.threads, 0..) |*j, i| {
+    try self.sched.init(alloc, 1, cfg.N_threads, cfg.N_queue_capacity);
+    errdefer self.sched.deinit(alloc);
+    for (self.sched.threads, 0..) |*j, i| {
         var next: ?*ResetEvent = null;
         if (i != 0) {
-            next = &bsched.threads[i - 1].handle_sets_thread_waits;
+            next = &self.sched.threads[i - 1].handle_sets_thread_waits;
         }
-        try j.spawn(alloc, "GP task thread {}", .{i + 1}, waiting_worker, .{ bsched.spsc, cfg.startup_fn, next });
+        try j.spawn(alloc, "GP task thread {}", .{i + 1}, waiting_worker, .{ self.sched.spsc, cfg.startup_fn, next });
         errdefer j.join(alloc);
     }
-    return Sched{
-        .sched = bsched,
-    };
 }
+
 pub fn deinit(self: *Sched, alloc: Allocator) void {
     for (self.sched.threads) |*j| {
         j.join(alloc);

@@ -153,15 +153,6 @@ pub fn FlexFifo(comptime T: type, multi_reader: bool, multi_writer: bool) align(
     };
 }
 
-test "spsc basic test" {
-    var fifo = Fifo(u32, 4){};
-    for (0..10) |i| {
-        const casted: u32 = @intCast(i);
-        fifo.push(casted) catch unreachable;
-        const ret = fifo.pop().?;
-        try std.testing.expect((ret == casted));
-    }
-}
 pub fn LinkedChannel(
     comptime SendT: type,
     comptime ReturnT: type,
@@ -203,6 +194,12 @@ pub fn get_bidirectional_linked_channels(gpa: Allocator, comptime A: type, compt
     };
 }
 
-test "test all refs" {
-    std.testing.refAllDecls(@This());
+test "spsc basic test" {
+    var fifo = Fifo(u32, 4){};
+    for (0..10) |i| {
+        const casted: u32 = @intCast(i);
+        fifo.push(casted) catch unreachable;
+        const ret = fifo.pop().?;
+        try std.testing.expect((ret == casted));
+    }
 }

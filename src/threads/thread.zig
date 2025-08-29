@@ -7,9 +7,13 @@ const Atomic = atomic.AcqRelAtomic;
 
 const ResetEvent = std.Thread.ResetEvent;
 pub const prio = @import("thread_prio.zig");
-pub const sleep = @import("timer.zig");
+const sleep = @import("timer.zig");
+pub const Timer = sleep.Timer;
+pub const context = @import("context.zig");
+
 test "prio" {
     _ = prio;
+    _ = context;
     _ = sleep;
 }
 
@@ -24,7 +28,14 @@ pub const Signal = enum(u8) {
         return @intFromEnum(self) >= @intFromEnum(Signal.running);
     }
 };
+pub const StopError = error{
+    ThreadTerminated,
+};
 
+/// - gets passed to function spawned with ThreadControl
+/// - fn should check signal for the stop signal and terminate accordingly
+/// - fn can wait for wakeup
+/// - fn can wakeup a waiting thread
 pub const ThreadStatus = struct {
     thread_sets_handle_waits: *ResetEvent,
     handle_sets_thread_waits: *ResetEvent,
@@ -35,12 +46,20 @@ pub const ThreadStatus = struct {
     pub fn reset(self: *const ThreadStatus) void {
         self.handle_sets_thread_waits.reset();
     }
-    pub fn wait(self: *const ThreadStatus, time_out_ns: u64) !void {
-        const signal = self.signal.load();
-        if (signal == .stop_signal) return;
+    const WaitError = error{Timeout} || StopError;
+    pub fn wait(self: *const ThreadStatus, time_out_ns: u64) WaitError!void {
+        try self.check_stop_signal();
         try self.handle_sets_thread_waits.timedWait(time_out_ns);
     }
+    pub fn check_stop_signal(self: *const ThreadStatus) StopError!void {
+        const signal = self.signal.load();
+        if (signal == .stop_signal) return StopError.ThreadTerminated;
+    }
 };
+/// - spawn a thread
+/// - join a thread
+/// - running fn can decide to wait for wakeup call from ThreadControl
+/// - you can wait till the running fn wakes you up
 pub const ThreadControl = struct {
     thread_sets_handle_waits: ResetEvent = .{},
     handle_sets_thread_waits: ResetEvent = .{},
@@ -59,6 +78,7 @@ pub const ThreadControl = struct {
     pub fn wait(self: *ThreadControl, time_out_ns: u64) !void {
         try self.thread_sets_handle_waits.timedWait(time_out_ns);
     }
+
     pub fn join(self: *ThreadControl, alloc: Allocator) void {
         if (self.handle == null) return;
         self.spinwait_for_startup();
@@ -85,7 +105,12 @@ pub const ThreadControl = struct {
             fn startup(th_status: ThreadStatus, dbg_name: []const u8, fnc: anytype, xargs: anytype) void {
                 th_status.signal.store(.running);
                 _ = @call(.auto, fnc, .{th_status} ++ xargs) catch |e| {
-                    std.log.err("{s}: {}", .{ dbg_name, e });
+                    switch (e) {
+                        StopError.ThreadTerminated => {},
+                        else => {
+                            std.log.err("{s}: {}", .{ dbg_name, e });
+                        },
+                    }
                 };
                 std.log.info("{s} is terminating...", .{dbg_name});
                 th_status.signal.store(.stopped);
