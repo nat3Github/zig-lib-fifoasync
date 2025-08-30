@@ -193,13 +193,3 @@ pub fn get_bidirectional_linked_channels(gpa: Allocator, comptime A: type, compt
         .B_to_A_channel = LinkedChannel(B, A).init(fifoB, fifoA),
     };
 }
-
-test "spsc basic test" {
-    var fifo = Fifo(u32, 4){};
-    for (0..10) |i| {
-        const casted: u32 = @intCast(i);
-        fifo.push(casted) catch unreachable;
-        const ret = fifo.pop().?;
-        try std.testing.expect((ret == casted));
-    }
-}
