@@ -38,7 +38,7 @@ pub fn polling_worker(
     while (ctrl.signal.load() != .stop_signal) {
         for (self.sched.spsc) |*q| {
             while (q.pop()) |task| {
-                task.call(.{});
+                task.call(self.async_executor());
                 if (ctrl.signal.load() == .stop_signal) return;
             }
         }
@@ -74,7 +74,9 @@ fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
 pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
     return .{
         .ptr = @ptrCast(self),
-        .f = exe_opaque,
+        .vtable = &.{
+            .execute_task_fn = exe_opaque,
+        },
     };
 }
 

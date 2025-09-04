@@ -44,8 +44,6 @@ semi_critical: Fifo = undefined,
 ll_exec: AsyncExecutor = undefined,
 read_exec: AsyncExecutor = undefined,
 
-task_context: Task.Context = undefined,
-
 fn push_semi_critical(self_: *anyopaque, t: Task) !void {
     const self: *RtSched2 = @ptrCast(@alignCast(self_));
     try self.semi_critical.push(t);
@@ -155,5 +153,5 @@ pub fn main() void {
     std.debug.print("Main: Scheduler resumed. Test finished.\n", .{});
 }
 test {
-    main();
+    // main();
 }

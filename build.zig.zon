@@ -2,15 +2,15 @@
     .fingerprint = 0xbe2de7db0000fa5e,
     .name = .fifoasync,
     .version = "0.0.0",
-    .minimum_zig_version = "0.14.1",
+    .minimum_zig_version = "0.15.1",
     .dependencies = .{
-        .update_tool = .{
-            .url = "git+https://github.com/nat3Github/zig-lib-update#39e63722acddd6bbb4c5d595d046f43807cecc12",
-            .hash = "update_tool-0.0.0-MwAI-eoZAAAQ2ud9gn9neQM5EC8PKpF6_HRmRfPF9-OL",
-        },
         .zigwin32 = .{
             .url = "git+https://github.com/marlersoft/zigwin32#9d399c0895de4746c1fcab366841e2ab031b0429",
             .hash = "zigwin32-25.0.28-preview-AAAAANd_5APbcon3QqoYfLKnJ13fiBGJSGq9YrVZsfI-",
+        },
+        .update_tool = .{
+            .url = "git+https://github.com/nat3Github/zig-lib-update#a0ef597d694e1d5f9752841cbf737095bb9c4cf9",
+            .hash = "update_tool-1.0.0-MwAI-VgaAAB2y3AVVByTm1A6kQhyGB-QzWhGObaJhaKY",
         },
     },
     .paths = .{

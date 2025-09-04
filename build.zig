@@ -15,10 +15,6 @@ pub fn build(b: *std.Build) !void {
             .url = "https://github.com/marlersoft/zigwin32",
             .branch = "main",
         },
-    }, .{
-        .name = "update",
-        .optimize = optimize,
-        .target = target,
     })) return;
 
     const fifoasync_module = b.addModule("fifoasync", .{

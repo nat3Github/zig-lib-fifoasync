@@ -9,6 +9,7 @@ const thread = root.thread;
 const Spinlock = root.prim.Spinlock;
 const Timer = std.time.Timer;
 const Atomic = root.util.atomic.AcqRelAtomic;
+const AsyncExecutor = root.sched.AsyncExecutor;
 
 const BaseSched = @import("base_sched.zig");
 pub const Fifo = BaseSched.Fifo;
@@ -29,18 +30,19 @@ sched: BaseSched = .{},
 
 pub fn waiting_worker(
     ctrl: thread.ThreadStatus,
-    spsc: []BaseSched.Fifo,
+    self: *@This(),
     start_up_fn: anytype,
     wakeup_next: ?*ResetEvent,
 ) !void {
     try start_up_fn();
+    const spsc = self.sched.spsc;
     var nothing_count: u8 = 0;
     while (ctrl.signal.load() != .stop_signal) {
         for (spsc) |*q| {
             const pop = q.pop();
             if (pop) |task| {
                 nothing_count = 0;
-                task.call(.{});
+                task.call(self.async_executor());
             } else {
                 nothing_count += 1;
                 for (0..nothing_count) |_| {
@@ -71,7 +73,7 @@ pub fn init(self: *@This(), alloc: Allocator, cfg: Config) !void {
         if (i != 0) {
             next = &self.sched.threads[i - 1].handle_sets_thread_waits;
         }
-        try j.spawn(alloc, "GP task thread {}", .{i + 1}, waiting_worker, .{ self.sched.spsc, cfg.startup_fn, next });
+        try j.spawn(alloc, "GP task thread {}", .{i + 1}, waiting_worker, .{ self, cfg.startup_fn, next });
         errdefer j.join(alloc);
     }
 }
@@ -92,11 +94,10 @@ fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
     const self: *Sched = @alignCast(@ptrCast(self_ptr));
     try self.exe(task);
 }
-pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
-    return .{
-        .ptr = @ptrCast(self),
-        .f = exe_opaque,
-    };
+pub fn async_executor(self: *Sched) AsyncExecutor {
+    return AsyncExecutor{ .ptr = @ptrCast(self), .vtable = &.{
+        .execute_task_fn = exe_opaque,
+    } };
 }
 
 pub fn wake_sched(self: *Sched) void {

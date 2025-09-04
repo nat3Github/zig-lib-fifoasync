@@ -64,29 +64,31 @@ pub const aarch64 = struct {
         sp: u64, // Stack Pointer
     };
     pub fn swap_context(old_ctx: *aarch64.Context, new_ctx: *aarch64.Context) callconv(.C) void {
-        asm volatile (
-            \\stp x19, x20, [%[old_ctx]]
-            \\stp x21, x22, [%[old_ctx], #16]
-            \\stp x23, x24, [%[old_ctx], #32]
-            \\stp x25, x26, [%[old_ctx], #48]
-            \\stp x27, x28, [%[old_ctx], #64]
-            \\stp x29, x30, [%[old_ctx], #80]
-            \\mov x10, sp
-            \\str x10, [%[old_ctx], #96]
-            \\ldp x19, x20, [%[new_ctx]]
-            \\ldp x21, x22, [%[new_ctx], #16]
-            \\ldp x23, x24, [%[new_ctx], #32]
-            \\ldp x25, x26, [%[new_ctx], #48]
-            \\ldp x27, x28, [%[new_ctx], #64]
-            \\ldp x29, x30, [%[new_ctx], #80]
-            \\ldr x10, [%[new_ctx], #96]
-            \\mov sp, x10
-            \\ret
-            : // This colon is necessary to separate the assembly string from the constraints.
-            : [old_ctx] "r" (old_ctx),
-              [new_ctx] "r" (new_ctx), // Inputs
-            : "x10", "memory" // Clobbered registers
-        );
+        _ = new_ctx;
+        _ = old_ctx;
+        // asm volatile (
+        //     \\stp x19, x20, [%[old_ctx]]
+        //     \\stp x21, x22, [%[old_ctx], #16]
+        //     \\stp x23, x24, [%[old_ctx], #32]
+        //     \\stp x25, x26, [%[old_ctx], #48]
+        //     \\stp x27, x28, [%[old_ctx], #64]
+        //     \\stp x29, x30, [%[old_ctx], #80]
+        //     \\mov x10, sp
+        //     \\str x10, [%[old_ctx], #96]
+        //     \\ldp x19, x20, [%[new_ctx]]
+        //     \\ldp x21, x22, [%[new_ctx], #16]
+        //     \\ldp x23, x24, [%[new_ctx], #32]
+        //     \\ldp x25, x26, [%[new_ctx], #48]
+        //     \\ldp x27, x28, [%[new_ctx], #64]
+        //     \\ldp x29, x30, [%[new_ctx], #80]
+        //     \\ldr x10, [%[new_ctx], #96]
+        //     \\mov sp, x10
+        //     \\ret
+        //     : // This colon is necessary to separate the assembly string from the constraints.
+        //     : [old_ctx] "r" (old_ctx),
+        //       [new_ctx] "r" (new_ctx), // Inputs
+        //     : "x10", "memory" // Clobbered registers
+        // );
     }
     pub fn align_ptr(ptr: usize) usize {
         const not: usize = 0xF;

@@ -32,11 +32,12 @@ polling_thread: root.thread.ThreadControl = .{},
 
 pub fn hybrid_poller(
     ctrl: thread.ThreadStatus,
-    spsc: []SchedGP.Fifo,
+    self: *@This(),
     start_up_fn: anytype,
     sleep_ns: u64,
-    sched_gp: *SchedGP,
 ) !void {
+    const sched_gp = &self.sched_gp;
+    const spsc = self.sched_gp.sched.spsc;
     var t = root.thread.Timer.init() catch return;
     try start_up_fn();
     var is_awake: bool = false;
@@ -47,7 +48,7 @@ pub fn hybrid_poller(
                 is_awake = true;
                 sched_gp.wake_sched();
             }
-            task.call(.{});
+            task.call(self.async_executor());
             if (ctrl.signal.load() == .stop_signal) return;
         }
         is_awake = false;
@@ -65,9 +66,7 @@ pub fn init(self: *Sched, alloc: Allocator, cfg: Config) !void {
         .startup_fn = cfg.startup_fn,
     });
     errdefer self.sched_gp.deinit(alloc);
-    try self.polling_thread.spawn(alloc, "hybrid sched polling thread", .{}, hybrid_poller, .{
-        self.sched_gp.sched.spsc, cfg.startup_fn, cfg.sleep_ns, &self.sched_gp,
-    });
+    try self.polling_thread.spawn(alloc, "hybrid sched polling thread", .{}, hybrid_poller, .{ self, cfg.startup_fn, cfg.sleep_ns });
     errdefer self.polling_thread.join(alloc);
 }
 
@@ -84,9 +83,12 @@ fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
     const self: *Sched = @alignCast(@ptrCast(self_ptr));
     try self.exe(task);
 }
+
 pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
     return .{
         .ptr = @ptrCast(self),
-        .f = exe_opaque,
+        .vtable = &.{
+            .execute_task_fn = exe_opaque,
+        },
     };
 }

@@ -27,20 +27,20 @@ pub const TaskContext = struct {
 ///
 /// its easier to use `ASFunction` which is a helpful wrapper for Task
 pub const Task = struct {
-    pub const Context = TaskContext;
-    const This = @This();
-    instance: ?*anyopaque = null,
-    task: ?*const fn (*anyopaque, Context) void = null,
+    data: *anyopaque,
+    task_fn: *const fn (*anyopaque, AsyncExecutor) void,
     /// the t_fn must re-cast the *anyopaque pointer to *T
-    pub fn set(self: *This, T: type, t_ptr: *T, t_fn: *const fn (*anyopaque, Context) void) void {
+    pub inline fn set(self: *Task, T: type, t_ptr: *T, t_fn: *const fn (*anyopaque, AsyncExecutor) void) void {
         const cast: *anyopaque = @ptrCast(t_ptr);
-        self.instance = cast;
-        self.task = t_fn;
+        self.data = cast;
+        self.task_fn = t_fn;
     }
-    pub fn call(self: This, task_ctx: Context) void {
-        if (self.instance) |inst| {
-            @call(.auto, self.task.?, .{ inst, task_ctx });
-        }
+    /// calls the fn ptr of the Task, with its payload
+    /// this fn is to be called by an AsyncExecutor
+    ///
+    /// pass AsyncExecutor as exec that the Task can decide to yield!
+    pub fn call(self: Task, exec: AsyncExecutor) void {
+        self.task_fn(self.data, exec);
     }
 };
 
@@ -52,7 +52,7 @@ fn filtered_arg_tuple(comptime T: type) type {
         if (len == 0) return T;
         var x: [len]type = undefined;
         for (t.fields, &x) |f, *y| y.* = f.type;
-        if (x[0] == TaskContext) {
+        if (x[0] == AsyncExecutor) {
             return std.meta.Tuple(x[1..]);
         } else return std.meta.Tuple(x[0..]);
     }
@@ -69,9 +69,9 @@ const TaskState = enum(u8) {
 /// make sure the memory is defined for the duration of the async call!
 /// call join to wait for the end of the task!
 ///
-/// you can use Task.Context for cooperative yielding and cancelation
+/// you can use AsyncExecutor.yield() for cooperative yielding and cancelation
 /// (will only have an effect if its supported by the AsyncExecutor)
-/// in your fn take Task.Context as first argument and call yield() to segregate a long function
+/// if the first argument of Fn is of type AsyncExecutor Fn, will be passed the AsyncExecutor it was called with
 pub fn ASFunction(Fn: anytype) type {
     const FnT = @TypeOf(Fn);
     const FnArgs = filtered_arg_tuple(std.meta.ArgsTuple(FnT));
@@ -98,12 +98,16 @@ pub fn ASFunction(Fn: anytype) type {
         }
         /// NOTE the Memory of *@This() must remain well defined till the task has finished !!!
         /// threadsafe
-        pub inline fn call(self: *@This(), args: FnArgs, async_executor: anytype) !void {
+        pub inline fn call(
+            self: *@This(),
+            async_executor: anytype,
+            args: FnArgs,
+        ) !void {
             if (self.is_running()) return error.TaskIsBusy;
             self.fnarg = args;
             self.state.store(.busy, .release);
             self.re.reset();
-            var task = Task{};
+            var task: Task = undefined;
             task.set(@This(), self, anyopaque_run);
             if (@TypeOf(async_executor) == *std.Thread.Pool) {
                 const pool: *std.Thread.Pool = async_executor;
@@ -140,10 +144,10 @@ pub fn ASFunction(Fn: anytype) type {
             self.state.store(.none, .release);
             return res;
         }
-        fn anyopaque_run(p: *anyopaque, task_ctx: Task.Context) void {
+        fn anyopaque_run(p: *anyopaque, as_exe: AsyncExecutor) void {
             const self: *@This() = @alignCast(@ptrCast(p));
             if (comptime @typeInfo(FnArgs).@"struct".fields.len != @typeInfo(FnT).@"fn".params.len) {
-                self.fnret = @call(.auto, @This().fnc, .{task_ctx} ++ self.fnarg);
+                self.fnret = @call(.auto, @This().fnc, .{as_exe} ++ self.fnarg);
             } else {
                 self.fnret = @call(.auto, @This().fnc, self.fnarg);
             }
@@ -155,9 +159,12 @@ pub fn ASFunction(Fn: anytype) type {
 
 pub const AsyncExecutor = struct {
     ptr: *anyopaque,
-    f: *const fn (*anyopaque, Task) anyerror!void,
+    vtable: *const AsyncExecutorVtable,
     pub fn execute(Self: AsyncExecutor, task: Task) !void {
-        return Self.f(Self.ptr, task);
+        return Self.vtable.execute_task_fn(Self.ptr, task);
+    }
+    pub fn yield(Self: AsyncExecutor) error{Cancelled}!void {
+        return Self.vtable.yield_fn(Self.ptr);
     }
     pub fn from_std_pool(pool: *std.Thread.Pool) AsyncExecutor {
         const m = struct {
@@ -172,3 +179,10 @@ pub const AsyncExecutor = struct {
         };
     }
 };
+
+pub const AsyncExecutorVtable = struct {
+    execute_task_fn: *const fn (*anyopaque, Task) anyerror!void,
+    yield_fn: *const fn (*anyopaque) error{Cancelled}!void = __no_yield,
+};
+
+fn __no_yield(_: *anyopaque) error{Cancelled}!void {}
