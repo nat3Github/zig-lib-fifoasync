@@ -10,17 +10,8 @@ const AtomicOrder = std.builtin.AtomicOrder;
 
 const Type = std.builtin.Type;
 
-const Cancelled = error{Cancelled};
+pub const Cancelled = error{Cancelled};
 const common = @This();
-
-pub const TaskContext = struct {
-    pub const Cancelled = common.Cancelled;
-    ptr: *anyopaque = undefined,
-    yield_fn: ?*const fn (*anyopaque) TaskContext.Cancelled!void = null,
-    pub fn yield(self: *const @This()) TaskContext.Cancelled!void {
-        try self.yield_fn(self.ptr);
-    }
-};
 
 /// Generic type erased Task
 /// if arguments or return values are needed they must be somehow stored in the instance
@@ -52,16 +43,31 @@ fn filtered_arg_tuple(comptime T: type) type {
         if (len == 0) return T;
         var x: [len]type = undefined;
         for (t.fields, &x) |f, *y| y.* = f.type;
-        if (x[0] == AsyncExecutor) {
+        if (x[0] == TaskContext) {
             return std.meta.Tuple(x[1..]);
         } else return std.meta.Tuple(x[0..]);
     }
 }
+/// can be used by Fn in ASFunction to yield cooperatively (enables efficient task cancelling!)
+pub const TaskContext = struct {
+    state: *Atomic(TaskState),
+    exec: AsyncExecutor,
+    pub fn yield(self: *const @This()) Cancelled!void {
+        try self.exec.yield();
+        if (self.state.load(.acquire) == .busy_cancelling) return Cancelled.Cancelled;
+    }
+};
 
 const TaskState = enum(u8) {
-    none,
-    busy,
-    has_result,
+    none = 0,
+    has_result = 1,
+    busy = 2,
+    busy_cancelling = 3,
+
+    /// the task is in it busy / locked state. result and fn args cant be touched
+    pub fn is_busy(Self: TaskState) bool {
+        return @intFromEnum(Self) >= @intFromEnum(TaskState.busy);
+    }
 };
 
 /// stores fn args and return data and wires a Task
@@ -69,17 +75,28 @@ const TaskState = enum(u8) {
 /// make sure the memory is defined for the duration of the async call!
 /// call join to wait for the end of the task!
 ///
-/// you can use AsyncExecutor.yield() for cooperative yielding and cancelation
-/// (will only have an effect if its supported by the AsyncExecutor)
-/// if the first argument of Fn is of type AsyncExecutor Fn, will be passed the AsyncExecutor it was called with
+/// you can use TaskContext.yield() for cooperative yielding and cancelation
+/// if the first argument of Fn is of type TaskContext, Fn will be passed a TaskContext for cooperative yielding
 pub fn ASFunction(Fn: anytype) type {
     const FnT = @TypeOf(Fn);
     const FnArgs = filtered_arg_tuple(std.meta.ArgsTuple(FnT));
     comptime if (@typeInfo(FnT).@"fn".calling_convention == .@"inline") @panic("inlined functions do not work with ASFunction, please use a normal fn!");
-    return struct {
-        pub const ReturnType = @typeInfo(FnT).@"fn".return_type.?;
-        const fnc: *const FnT = Fn;
+    const R = @typeInfo(FnT).@"fn".return_type.?;
+    // NOTE: if compiliation failes here your Fn is not returning an error
+    const E = @typeInfo(R).error_union.error_set;
+    // NOTE: if compilation failes here your Fn is returning an error that does not include "Cancelled"
+    comptime assert(blk: {
+        const es = @typeInfo(E).error_set;
+        if (es == null) break :blk true;
+        for (es.?) |err| {
+            if (std.mem.eql(u8, err.name, "Cancelled")) break :blk true;
+        }
+        break :blk false;
+    });
 
+    return struct {
+        const fnc: *const FnT = Fn;
+        pub const ReturnType = R;
         fnarg: FnArgs = undefined,
         fnret: ReturnType = undefined,
         state: Atomic(TaskState) = Atomic(TaskState).init(.none),
@@ -125,12 +142,12 @@ pub fn ASFunction(Fn: anytype) type {
                 },
             }
         }
-        inline fn task_state(self: *@This()) TaskState {
+        inline fn get_task_state(self: *@This()) TaskState {
             return self.state.load(.acquire);
         }
         /// threadsafe
         pub inline fn is_running(self: *@This()) bool {
-            return self.state.load(.acquire) == .busy;
+            return self.get_task_state().is_busy();
         }
         /// threadsafe
         inline fn has_result(self: *@This()) bool {
@@ -144,12 +161,24 @@ pub fn ASFunction(Fn: anytype) type {
             self.state.store(.none, .release);
             return res;
         }
+        /// cancel a running task
+        /// works only with cooperative yielding (the Task must call TaskContext.yield() on its own)
+        pub inline fn cancel(self: *@This()) void {
+            _ = self.state.cmpxchgStrong(.busy, .busy_cancelling, .seq_cst, .seq_cst);
+        }
         fn anyopaque_run(p: *anyopaque, as_exe: AsyncExecutor) void {
-            const self: *@This() = @alignCast(@ptrCast(p));
-            if (comptime @typeInfo(FnArgs).@"struct".fields.len != @typeInfo(FnT).@"fn".params.len) {
-                self.fnret = @call(.auto, @This().fnc, .{as_exe} ++ self.fnarg);
+            const self: *@This() = @ptrCast(@alignCast(p));
+            if (!(self.state.load(.acquire) == .busy_cancelling)) {
+                if (comptime @typeInfo(FnArgs).@"struct".fields.len != @typeInfo(FnT).@"fn".params.len) {
+                    const ctx = TaskContext{
+                        .exec = as_exe,
+                    };
+                    self.fnret = @call(.auto, @This().fnc, .{ctx} ++ self.fnarg);
+                } else {
+                    self.fnret = @call(.auto, @This().fnc, self.fnarg);
+                }
             } else {
-                self.fnret = @call(.auto, @This().fnc, self.fnarg);
+                self.fnret = Cancelled.Cancelled;
             }
             self.re.set();
             self.state.store(.has_result, .release);
@@ -169,7 +198,7 @@ pub const AsyncExecutor = struct {
     pub fn from_std_pool(pool: *std.Thread.Pool) AsyncExecutor {
         const m = struct {
             fn f(p: *anyopaque, t: Task) anyerror!void {
-                const pp: *std.Thread.Pool = @alignCast(@ptrCast(p));
+                const pp: *std.Thread.Pool = @ptrCast(@alignCast(p));
                 try pp.spawn(Task.call, .{t});
             }
         };

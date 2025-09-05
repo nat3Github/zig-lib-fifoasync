@@ -1,24 +1,26 @@
 const std = @import("std");
 const fifoasync = @import("fifoasync");
 
-const DefaultSched = fifoasync.sched.DefaultSched;
-const HybridSched = fifoasync.sched.HybridSched;
-const RealtimeSched = fifoasync.sched.RealtimeSched;
-const Task = fifoasync.sched.Task;
-const AsyncExecutor = fifoasync.sched.AsyncExecutor;
-const AsFn = fifoasync.sched.ASFunction;
+const fasched = fifoasync.sched;
+const DefaultSched = fasched.DefaultSched;
+const HybridSched = fasched.HybridSched;
+const RealtimeSched = fasched.RealtimeSched;
+const Task = fasched.Task;
+const Cancelled = fasched.Cancelled;
+const AsyncExecutor = fasched.AsyncExecutor;
+const AsFn = fasched.ASFunction;
 
 pub fn negate(b: *anyopaque, _: AsyncExecutor) void {
-    const bp: *bool = @alignCast(@ptrCast(b));
+    const bp: *bool = @ptrCast(@alignCast(b));
     bp.* = !bp.*;
 }
 
-pub fn negate2(as: AsyncExecutor, bp: *bool) !void {
-    try as.yield();
+pub fn negate2(bp: *bool) anyerror!void {
+    // try as.yield();
     bp.* = !bp.*;
 }
 
-pub fn negate3(bp: *bool) void {
+pub fn negate3(bp: *bool) Cancelled!void {
     bp.* = !bp.*;
 }
 
@@ -48,10 +50,33 @@ fn test_as_exe3(as_exe: AsyncExecutor) !void {
     task.join();
     try std.testing.expect(b);
 }
+
+fn test_as_exe4(as_exe: AsyncExecutor) !void {
+    var b = false;
+    var task: AsFn(negate3) = .{};
+    try task.call(as_exe, .{&b});
+    task.cancel();
+    task.join();
+    const res = task.fnret;
+    try std.testing.expectError(Cancelled.Cancelled, res);
+    try std.testing.expect(!b);
+}
+
+fn test_as_exe5(as_exe: AsyncExecutor) !void {
+    var b = false;
+    var task: AsFn(negate3) = .{};
+    try task.call(as_exe, .{&b});
+    std.Thread.sleep(1_000_000);
+    task.cancel();
+    task.join();
+    try std.testing.expect(b);
+}
 fn test_all(as_exe: AsyncExecutor) !void {
     try test_as_exe(as_exe);
     try test_as_exe2(as_exe);
     try test_as_exe3(as_exe);
+    try test_as_exe4(as_exe);
+    try test_as_exe5(as_exe);
 }
 
 test "sched gp" {
