@@ -4,38 +4,40 @@ const root = @import("../root.zig");
 pub const Fibonacci = @This();
 const List = std.ArrayList(root.thread.ThreadControl);
 const Au64 = std.atomic.Value(u64);
-threads: List,
-counter: *Au64,
-pub fn start(alloc: std.mem.Allocator) !Fibonacci {
-    return startEx(alloc, 2 * (std.Thread.getCpuCount() catch 16));
+threads: List = .{},
+counter: Au64 = .init(0),
+alloc: std.mem.Allocator = undefined,
+fn init(self: *Fibonacci, alloc: std.mem.Allocator) !void {
+    self.* = .{};
+    self.alloc = alloc;
 }
-pub fn startEx(alloc: std.mem.Allocator, threads: usize) !Fibonacci {
-    const at = try alloc.create(Au64);
-    errdefer alloc.destroy(at);
-    at.* = .init(0);
-    var self = Fibonacci{
-        .threads = .init(alloc),
-        .counter = at,
-    };
-    try self.threads.ensureTotalCapacity(threads);
+
+fn deinit(self: *Fibonacci, alloc: std.mem.Allocator) void {
+    self.threads.deinit(alloc);
+}
+
+pub fn start(self: *Fibonacci, alloc: std.mem.Allocator) !void {
+    try self.startEx(alloc, 2 * (std.Thread.getCpuCount() catch 16));
+}
+pub fn startEx(self: *Fibonacci, alloc: std.mem.Allocator, threads: usize) !void {
+    try self.init(alloc);
+    try self.threads.ensureTotalCapacity(self.alloc, threads);
     for (0..threads) |_| {
         const tc = root.thread.ThreadControl{};
-        self.threads.append(tc) catch unreachable;
+        self.threads.appendAssumeCapacity(tc);
     }
     for (self.threads.items, 0..) |*tk, i| {
-        try tk.spawn(alloc, "fibonacci thread {}", .{i}, fib_load, .{self.counter});
+        try tk.spawn(alloc, "fibonacci thread {}", .{i}, fib_load, .{&self.counter});
         tk.spinwait_for_startup();
     }
-    return self;
 }
 pub fn stop(self: *Fibonacci) void {
     std.debug.print("calculated {} fibonaccis\n", .{self.counter.load(.seq_cst)});
-    const alloc = self.threads.allocator;
+    const alloc = self.alloc;
     for (self.threads.items) |*tk| {
         tk.join(alloc);
     }
-    self.threads.deinit();
-    alloc.destroy(self.counter);
+    self.deinit(alloc);
 }
 fn fib_load(th_status: root.thread.ThreadStatus, c: *std.atomic.Value(u64)) !void {
     const fibs = struct {
