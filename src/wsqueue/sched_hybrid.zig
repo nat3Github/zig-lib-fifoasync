@@ -41,7 +41,7 @@ pub fn hybrid_poller(
     var t = root.thread.Timer.init() catch return;
     try start_up_fn();
     var is_awake: bool = false;
-    while (ctrl.signal.load() != .stop_signal) {
+    while (ctrl.signal.is_running()) {
         const q = &spsc[0];
         while (q.pop()) |task| {
             if (!is_awake) {
@@ -49,7 +49,15 @@ pub fn hybrid_poller(
                 sched_gp.wake_sched();
             }
             task.call(self.async_executor());
-            if (ctrl.signal.load() == .stop_signal) return;
+            if (!ctrl.signal.is_running()) {
+                // clear queue and return
+                for (spsc) |*q_| {
+                    while (q_.pop()) |task_| {
+                        task_.call(self.async_executor());
+                    }
+                }
+                return;
+            }
         }
         is_awake = false;
         t.rt_sleep(sleep_ns);
@@ -80,7 +88,7 @@ fn exe(self: *Sched, task: Task) anyerror!void {
 }
 
 fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
-    const self: *Sched = @alignCast(@ptrCast(self_ptr));
+    const self: *Sched = @ptrCast(@alignCast(self_ptr));
     try self.exe(task);
 }
 

@@ -37,7 +37,7 @@ pub fn waiting_worker(
     try start_up_fn();
     const spsc = self.sched.spsc;
     var nothing_count: u8 = 0;
-    while (ctrl.signal.load() != .stop_signal) {
+    while (ctrl.signal.is_running()) {
         for (spsc) |*q| {
             const pop = q.pop();
             if (pop) |task| {
@@ -52,7 +52,15 @@ pub fn waiting_worker(
                     nothing_count = 0;
                     ctrl.wait(std.math.maxInt(u64)) catch {};
                     ctrl.reset();
-                    if (ctrl.signal.load() == .stop_signal) return;
+                    if (!ctrl.signal.is_running()) {
+                        // clear queue and return
+                        for (spsc) |*q_| {
+                            while (q_.pop()) |task| {
+                                task.call(self.async_executor());
+                            }
+                        }
+                        return;
+                    }
                     if (wakeup_next) |wn| {
                         wn.set();
                     }
@@ -91,7 +99,7 @@ fn exe(self: *Sched, task: Task) anyerror!void {
 }
 
 fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
-    const self: *Sched = @alignCast(@ptrCast(self_ptr));
+    const self: *Sched = @ptrCast(@alignCast(self_ptr));
     try self.exe(task);
 }
 pub fn async_executor(self: *Sched) AsyncExecutor {
@@ -106,5 +114,5 @@ pub fn wake_sched(self: *Sched) void {
 }
 
 fn recast(T: type, ptr: *anyopaque) *T {
-    return @as(*T, @alignCast(@ptrCast(ptr)));
+    return @as(*T, @ptrCast(@alignCast(ptr)));
 }

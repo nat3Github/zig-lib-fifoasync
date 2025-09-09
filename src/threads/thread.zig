@@ -17,15 +17,39 @@ test "prio" {
     _ = sleep;
 }
 
-pub const Signal = enum(u8) {
-    const default: Signal = .unitialized;
-    unitialized = 0,
-    running = 1,
-    stop_signal = 2,
-    stopped = 3,
-
-    pub fn has_started(self: Signal) bool {
-        return @intFromEnum(self) >= @intFromEnum(Signal.running);
+pub const Signal = struct {
+    pub const Signal_ = enum(u8) {
+        const default: Signal_ = .unitialized;
+        unitialized = 0,
+        running = 1,
+        stop_sig = 2,
+        stop_ack = 3,
+        stopped = 4,
+        pub fn has_started(self: Signal_) bool {
+            return @intFromEnum(self) >= @intFromEnum(Signal_.running);
+        }
+    };
+    raw: Atomic(Signal_) = .init(.unitialized),
+    pub fn has_started(self: *const Signal) bool {
+        return self.raw.load().has_started();
+    }
+    pub fn is_stop_signal(self: *Signal) bool {
+        const res = self.raw.load();
+        if (res == .stop_sig) self.raw.store(Signal_.stop_ack);
+        return @intFromEnum(res) >= @intFromEnum(Signal_.stop_sig);
+    }
+    pub fn is_running(self: *Signal) bool {
+        return !self.is_stop_signal();
+    }
+    fn set_stop_signal(self: *Signal) void {
+        if (self.raw.load() == .stopped) return;
+        self.raw.store(.stop_sig);
+    }
+    fn is_ack_or_stopped(self: *Signal) bool {
+        return @intFromEnum(self.raw.load()) >= @intFromEnum(Signal_.stop_ack);
+    }
+    fn set_started(self: *Signal) void {
+        self.raw.store(.running);
     }
 };
 pub const StopError = error{
@@ -39,7 +63,7 @@ pub const StopError = error{
 pub const ThreadStatus = struct {
     thread_sets_handle_waits: *ResetEvent,
     handle_sets_thread_waits: *ResetEvent,
-    signal: *Atomic(Signal),
+    signal: *Signal,
     pub fn wakeup(self: *const ThreadStatus) void {
         self.thread_sets_handle_waits.set();
     }
@@ -52,8 +76,7 @@ pub const ThreadStatus = struct {
         try self.handle_sets_thread_waits.timedWait(time_out_ns);
     }
     pub fn check_stop_signal(self: *const ThreadStatus) StopError!void {
-        const signal = self.signal.load();
-        if (signal == .stop_signal) return StopError.ThreadTerminated;
+        if (self.signal.is_stop_signal()) return StopError.ThreadTerminated;
     }
 };
 /// - spawn a thread
@@ -63,12 +86,11 @@ pub const ThreadStatus = struct {
 pub const ThreadControl = struct {
     thread_sets_handle_waits: ResetEvent = .{},
     handle_sets_thread_waits: ResetEvent = .{},
-    signal: Atomic(Signal) = .init(.default),
+    start_stop_event: ResetEvent = .{},
+    signal: Signal = .{},
     handle: ?std.Thread = null,
     debug_name: []const u8 = &.{},
-    pub fn spinwait_for_startup(self: *const ThreadControl) void {
-        while (!self.signal.load().has_started()) {}
-    }
+
     pub fn wakeup(self: *ThreadControl) void {
         self.handle_sets_thread_waits.set();
     }
@@ -80,30 +102,50 @@ pub const ThreadControl = struct {
     }
 
     pub fn join(self: *ThreadControl, alloc: Allocator) void {
-        if (self.handle == null) return;
-        self.spinwait_for_startup();
-        self.set_stop_signal();
+        if (self.handle == null) @panic("");
+        self.signal.set_stop_signal();
         self.wakeup();
+        // routine that makes sure the thread is not stalling and properly exiting
+        // stage one waiting for ACK
+        const max_usize = std.math.maxInt(usize);
+        const start_ns = 50_000;
+        std.log.warn("{s} ack cycle", .{self.debug_name});
+        for (0..max_usize) |i| {
+            if (self.signal.is_ack_or_stopped()) break;
+            const exp_limit = 300_000_000;
+            const t_sleep_ns = std.math.powi(usize, start_ns, i + 1) catch unreachable;
+            self.start_stop_event.timedWait(t_sleep_ns) catch {};
+            self.wakeup();
+            if (t_sleep_ns >= exp_limit) break;
+        }
+        if (!self.signal.is_ack_or_stopped()) @panic("Stop not Acknowledged");
+        std.log.warn("{s} signal cycle", .{self.debug_name});
+        for (0..max_usize) |i| {
+            if (self.signal.raw.load() == .stopped) break;
+            const exp_limit = 2_000_000_000;
+            const t_sleep_ns = std.math.powi(usize, start_ns, i + 1) catch unreachable;
+            self.start_stop_event.timedWait(t_sleep_ns) catch {};
+            if (t_sleep_ns >= exp_limit) @panic("Thread failed to finish after receiving the stop signal");
+        }
+        std.log.warn("{s} join", .{self.debug_name});
         self.handle.?.join();
         alloc.free(self.debug_name);
         self.debug_name = &.{};
         self.handle = null;
     }
-    /// NOTE: only stopp the thread if its started (thread function may run some cleanup logic thats get skipped otherwise)
-    inline fn set_stop_signal(self: *ThreadControl) void {
-        if (self.signal.load() == .stopped) return;
-        self.signal.store(.stop_signal);
-    }
     /// Abstracts stopping threads, gives you waiting / waking with two reset events via the Control parameter (first parameter in function must be type ThreadStatus)
     /// use the ThreadStaus in the your function to check if stop was signaled!
     /// NOTE: all resources used by the thread must be valid for the lifetime of the thread!
     pub fn spawn(self: *ThreadControl, alloc: Allocator, comptime debug_name_fmt: []const u8, debug_name_args: anytype, function: anytype, args: anytype) !void {
+        self.* = .{};
         assert(self.handle == null);
+        self.start_stop_event.reset();
         const name = try std.fmt.allocPrint(alloc, debug_name_fmt, debug_name_args);
         errdefer alloc.free(name);
         const m = struct {
-            fn startup(th_status: ThreadStatus, dbg_name: []const u8, fnc: anytype, xargs: anytype) void {
-                th_status.signal.store(.running);
+            fn startup(th_status: ThreadStatus, start_stop: *ResetEvent, dbg_name: []const u8, fnc: anytype, xargs: anytype) void {
+                th_status.signal.set_started();
+                start_stop.set();
                 _ = @call(.auto, fnc, .{th_status} ++ xargs) catch |e| {
                     switch (e) {
                         StopError.ThreadTerminated => {},
@@ -113,7 +155,8 @@ pub const ThreadControl = struct {
                     }
                 };
                 std.log.info("{s} is terminating...", .{dbg_name});
-                th_status.signal.store(.stopped);
+                th_status.signal.raw.store(.stopped);
+                start_stop.set();
             }
         };
         const status = ThreadStatus{
@@ -124,9 +167,11 @@ pub const ThreadControl = struct {
         const th = try std.Thread.spawn(
             .{ .allocator = alloc },
             m.startup,
-            .{ status, name, function, args },
+            .{ status, &self.start_stop_event, name, function, args },
         );
         self.debug_name = name;
         self.handle = th;
+        self.start_stop_event.timedWait(std.math.maxInt(u64)) catch unreachable;
+        self.start_stop_event.reset();
     }
 };

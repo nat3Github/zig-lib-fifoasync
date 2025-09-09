@@ -35,11 +35,19 @@ pub fn polling_worker(
 ) !void {
     var t = root.thread.Timer.init() catch return;
     try start_up_fn();
-    while (ctrl.signal.load() != .stop_signal) {
+    while (ctrl.signal.is_running()) {
         for (self.sched.spsc) |*q| {
             while (q.pop()) |task| {
                 task.call(self.async_executor());
-                if (ctrl.signal.load() == .stop_signal) return;
+                if (ctrl.signal.is_stop_signal()) {
+                    // clear queue and return
+                    for (self.sched.spsc) |*q_| {
+                        while (q_.pop()) |task_| {
+                            task_.call(self.async_executor());
+                        }
+                    }
+                    return;
+                }
             }
         }
         t.rt_sleep(sleep_ns);
@@ -63,21 +71,8 @@ pub fn deinit(self: *Sched, alloc: Allocator) void {
     self.sched.deinit(alloc);
 }
 
-fn exe(self: *Sched, task: Task) anyerror!void {
-    try self.sched.push(0, task);
-}
-
-fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
-    const self: *Sched = @alignCast(@ptrCast(self_ptr));
-    try self.exe(task);
-}
 pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
-    return .{
-        .ptr = @ptrCast(self),
-        .vtable = &.{
-            .execute_task_fn = exe_opaque,
-        },
-    };
+    return self.sched.async_executor();
 }
 
 const ExampleStruct = BaseSched.TestStruct;

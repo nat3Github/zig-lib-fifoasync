@@ -28,7 +28,7 @@ pub fn startEx(self: *Fibonacci, alloc: std.mem.Allocator, threads: usize) !void
     }
     for (self.threads.items, 0..) |*tk, i| {
         try tk.spawn(alloc, "fibonacci thread {}", .{i}, fib_load, .{&self.counter});
-        tk.spinwait_for_startup();
+        tk.wait_for_startup();
     }
 }
 pub fn stop(self: *Fibonacci) void {

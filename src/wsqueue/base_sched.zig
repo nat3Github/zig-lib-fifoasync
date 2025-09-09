@@ -30,6 +30,11 @@ pub fn init(self: *Sched, alloc: Allocator, queues: usize, threads: usize, spsc_
 
 pub fn deinit(self: *Sched, alloc: Allocator) void {
     for (self.spsc) |*q| {
+        // cleanup leftover tasks
+        while (q.pop()) |t| {
+            // just use first queue
+            t.call(self.async_executor());
+        }
         q.deinit(alloc);
     }
     defer alloc.free(self.spsc);
@@ -40,9 +45,26 @@ pub fn push(self: *Sched, que: usize, t: Task) !void {
     try self.spsc[que].push(t);
 }
 
+fn exe(self: *Sched, task: Task) anyerror!void {
+    try self.push(0, task);
+}
+
+fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
+    const self: *Sched = @ptrCast(@alignCast(self_ptr));
+    try self.exe(task);
+}
+pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
+    return .{
+        .ptr = @ptrCast(self),
+        .vtable = &.{
+            .execute_task_fn = exe_opaque,
+        },
+    };
+}
+
 pub const TestStruct = struct {
     fn recast(T: type, ptr: *anyopaque) *T {
-        return @as(*T, @alignCast(@ptrCast(ptr)));
+        return @as(*T, @ptrCast(@alignCast(ptr)));
     }
     const This = @This();
     age: usize = 99,

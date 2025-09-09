@@ -168,17 +168,19 @@ pub fn ASFunction(Fn: anytype) type {
         }
         fn anyopaque_run(p: *anyopaque, as_exe: AsyncExecutor) void {
             const self: *@This() = @ptrCast(@alignCast(p));
-            if (!(self.state.load(.acquire) == .busy_cancelling)) {
-                if (comptime @typeInfo(FnArgs).@"struct".fields.len != @typeInfo(FnT).@"fn".params.len) {
-                    const ctx = TaskContext{
-                        .exec = as_exe,
-                    };
-                    self.fnret = @call(.auto, @This().fnc, .{ctx} ++ self.fnarg);
-                } else {
-                    self.fnret = @call(.auto, @This().fnc, self.fnarg);
-                }
+            // NOTE(nat3) you cannot just check if the task is cancelled and refrain to call it!
+            // this is unintuitive to the user
+            // the user might deinitialize some state / do some error handling or other important things
+            // the task_fn returns error.Cancelled so the user expects the natural error handling flow
+            // thats why yielding/and canceling must be deployed!
+            if (comptime @typeInfo(FnArgs).@"struct".fields.len != @typeInfo(FnT).@"fn".params.len) {
+                const ctx = TaskContext{
+                    .exec = as_exe,
+                    .state = &self.state,
+                };
+                self.fnret = @call(.auto, @This().fnc, .{ctx} ++ self.fnarg);
             } else {
-                self.fnret = Cancelled.Cancelled;
+                self.fnret = @call(.auto, @This().fnc, self.fnarg);
             }
             self.re.set();
             self.state.store(.has_result, .release);
