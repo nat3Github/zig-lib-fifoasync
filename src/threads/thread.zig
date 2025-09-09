@@ -109,7 +109,7 @@ pub const ThreadControl = struct {
         // stage one waiting for ACK
         const max_usize = std.math.maxInt(usize);
         const start_ns = 50_000;
-        std.log.warn("{s} ack cycle", .{self.debug_name});
+        // std.log.warn("{s} ack cycle", .{self.debug_name});
         for (0..max_usize) |i| {
             if (self.signal.is_ack_or_stopped()) break;
             const exp_limit = 300_000_000;
@@ -119,7 +119,7 @@ pub const ThreadControl = struct {
             if (t_sleep_ns >= exp_limit) break;
         }
         if (!self.signal.is_ack_or_stopped()) @panic("Stop not Acknowledged");
-        std.log.warn("{s} signal cycle", .{self.debug_name});
+        // std.log.warn("{s} signal cycle", .{self.debug_name});
         for (0..max_usize) |i| {
             if (self.signal.raw.load() == .stopped) break;
             const exp_limit = 2_000_000_000;
@@ -127,7 +127,7 @@ pub const ThreadControl = struct {
             self.start_stop_event.timedWait(t_sleep_ns) catch {};
             if (t_sleep_ns >= exp_limit) @panic("Thread failed to finish after receiving the stop signal");
         }
-        std.log.warn("{s} join", .{self.debug_name});
+        // std.log.warn("{s} join", .{self.debug_name});
         self.handle.?.join();
         alloc.free(self.debug_name);
         self.debug_name = &.{};
