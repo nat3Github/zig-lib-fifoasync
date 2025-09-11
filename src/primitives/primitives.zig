@@ -149,7 +149,7 @@ pub fn RefCounted(comptime T: type) type {
         }
         /// Increments the reference count.
         pub fn increment(self: *@This()) void {
-            _ = self.ref_count.fetchAdd(1, .seq_cst);
+            std.debug.assert(0 != self.ref_count.fetchAdd(1, .seq_cst));
         }
         /// Decrements the reference count.
         /// Returns true if the count reached zero (meaning the memory can be freed).
