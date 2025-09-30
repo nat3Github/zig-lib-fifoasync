@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const root = @import("../root.zig");
 
@@ -9,6 +10,7 @@ const Atomic = std.atomic.Value;
 const AtomicOrder = std.builtin.AtomicOrder;
 
 const Type = std.builtin.Type;
+const is_debug = builtin.mode == .Debug;
 
 pub const Cancelled = error{Cancelled};
 const common = @This();
@@ -77,7 +79,9 @@ const TaskState = enum(u8) {
 ///
 /// you can use TaskContext.yield() for cooperative yielding and cancelation
 /// if the first argument of Fn is of type TaskContext, Fn will be passed a TaskContext for cooperative yielding
-pub fn ASFunction(Fn: anytype) type {
+pub fn ASFunction(
+    Fn: anytype,
+) type {
     const FnT = @TypeOf(Fn);
     const FnArgs = filtered_arg_tuple(std.meta.ArgsTuple(FnT));
     comptime if (@typeInfo(FnT).@"fn".calling_convention == .@"inline") @panic("inlined functions do not work with ASFunction, please use a normal fn!");
@@ -102,16 +106,32 @@ pub fn ASFunction(Fn: anytype) type {
         state: Atomic(TaskState) = Atomic(TaskState).init(.none),
         re: std.Thread.ResetEvent = .{},
 
-        pub fn join(self: *@This()) void {
+        fn join_block(self: *@This()) void {
             if (self.state.load(.acquire) == .none) return;
             var t: u32 = 1;
             while (!self.has_result()) {
-                self.re.timedWait(1_000_000_000) catch {
-                    std.debug.print("ASFunction: waiting for join ..{} s elapsed\n", .{t});
+                self.re.timedWait(2_000_000_000) catch {
+                    std.debug.print("async fn {s}: waiting for join ..{} s elapsed\n", .{ @typeName(FnT), t * 2 });
                     t += 1;
                 };
             }
             while (!self.has_result()) {}
+        }
+
+        pub fn join(self: *@This(), tc: TaskContext) void {
+            if (self.state.load(.acquire) == .none) return;
+            var xt = std.time.Timer.start() catch unreachable;
+            var t: u32 = 1;
+            while (!self.has_result()) {
+                tc.yield() catch {};
+                if (is_debug) {
+                    if (xt.read() > 2_000_000_000) {
+                        xt.reset();
+                        std.debug.print("async fn {s}: waiting for join ..{} s elapsed\n", .{ @typeName(FnT), t * 2 });
+                        t += 1;
+                    }
+                }
+            }
         }
         /// NOTE the Memory of *@This() must remain well defined till the task has finished !!!
         /// threadsafe
@@ -173,6 +193,7 @@ pub fn ASFunction(Fn: anytype) type {
             // the user might deinitialize some state / do some error handling or other important things
             // the task_fn returns error.Cancelled so the user expects the natural error handling flow
             // thats why yielding/and canceling must be deployed!
+
             if (comptime @typeInfo(FnArgs).@"struct".fields.len != @typeInfo(FnT).@"fn".params.len) {
                 const ctx = TaskContext{
                     .exec = as_exe,
