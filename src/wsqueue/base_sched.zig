@@ -53,11 +53,20 @@ fn exe_opaque(self_ptr: *anyopaque, task: Task) anyerror!void {
     const self: *Sched = @ptrCast(@alignCast(self_ptr));
     try self.exe(task);
 }
+
+fn yield_opaque(self_ptr: *anyopaque) root.sched.Cancelled!void {
+    const self: *Sched = @ptrCast(@alignCast(self_ptr));
+    if (self.spsc[0].pop()) |task| {
+        task.call(self.async_executor());
+    }
+}
+
 pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
     return .{
         .ptr = @ptrCast(self),
         .vtable = &.{
             .execute_task_fn = exe_opaque,
+            .yield_fn = yield_opaque,
         },
     };
 }

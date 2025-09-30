@@ -237,4 +237,6 @@ pub const AsyncExecutorVtable = struct {
     yield_fn: *const fn (*anyopaque) error{Cancelled}!void = __no_yield,
 };
 
-fn __no_yield(_: *anyopaque) error{Cancelled}!void {}
+fn __no_yield(_: *anyopaque) error{Cancelled}!void {
+    std.log.warn("no yield fn implemented, this can lead to deadlocks", .{});
+}
