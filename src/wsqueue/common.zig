@@ -106,7 +106,7 @@ pub fn ASFunction(
         state: Atomic(TaskState) = Atomic(TaskState).init(.none),
         re: std.Thread.ResetEvent = .{},
 
-        fn join_block(self: *@This()) void {
+        pub fn join_block(self: *@This()) void {
             if (self.state.load(.acquire) == .none) return;
             var t: u32 = 1;
             while (!self.has_result()) {
@@ -195,16 +195,19 @@ pub fn ASFunction(
             // thats why yielding/and canceling must be deployed!
 
             if (comptime @typeInfo(FnArgs).@"struct".fields.len != @typeInfo(FnT).@"fn".params.len) {
-                const ctx = TaskContext{
-                    .exec = as_exe,
-                    .state = &self.state,
-                };
+                const ctx = self.task_context(as_exe);
                 self.fnret = @call(.auto, @This().fnc, .{ctx} ++ self.fnarg);
             } else {
                 self.fnret = @call(.auto, @This().fnc, self.fnarg);
             }
             self.re.set();
             self.state.store(.has_result, .release);
+        }
+        pub fn task_context(self: *@This(), exe: AsyncExecutor) TaskContext {
+            return TaskContext{
+                .exec = exe,
+                .state = &self.state,
+            };
         }
     };
 }
