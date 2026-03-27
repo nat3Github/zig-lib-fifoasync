@@ -74,5 +74,3 @@ pub fn deinit(self: *Sched, alloc: Allocator) void {
 pub fn async_executor(self: *Sched) root.sched.AsyncExecutor {
     return self.sched.async_executor();
 }
-
-const ExampleStruct = BaseSched.TestStruct;

@@ -79,6 +79,7 @@ pub fn Fifo2(comptime T: type) type {
                 .data = data,
             };
         }
+
         pub fn deinit(self: *Self, alloc: Allocator) void {
             alloc.free(self.data);
         }

@@ -84,6 +84,7 @@ pub const ThreadStatus = struct {
 /// - running fn can decide to wait for wakeup call from ThreadControl
 /// - you can wait till the running fn wakes you up
 pub const ThreadControl = struct {
+    pub const Status = ThreadStatus;
     thread_sets_handle_waits: ResetEvent = .{},
     handle_sets_thread_waits: ResetEvent = .{},
     start_stop_event: ResetEvent = .{},
@@ -134,8 +135,9 @@ pub const ThreadControl = struct {
         self.handle = null;
     }
     /// Abstracts stopping threads, gives you waiting / waking with two reset events via the Control parameter (first parameter in function must be type ThreadStatus)
-    /// use the ThreadStaus in the your function to check if stop was signaled!
+    /// use the ThreadStatus in the your function to check if stop was signaled!
     /// NOTE: all resources used by the thread must be valid for the lifetime of the thread!
+    /// example for the function signature: pub fn thread(status: TC.Status, self: *@This()) anyerror!void {}
     pub fn spawn(self: *ThreadControl, alloc: Allocator, comptime debug_name_fmt: []const u8, debug_name_args: anytype, function: anytype, args: anytype) !void {
         self.* = .{};
         assert(self.handle == null);

@@ -61,12 +61,19 @@ pub fn set_realtime_critical_highest() !void {
 }
 pub fn set_realtime_critical_high() !void {
     if (comptime supports_pthread()) {
-        try pthread.set_prio(.RR, 0.7);
+        try pthread.set_prio(.Fifo, 0.7);
     } else if (builtin.target.os.tag == .windows) {
         try win32thread.set_thread_prio(.PRIORITY_HIGHEST);
     }
 }
 
+pub fn set_elevated() !void {
+    if (comptime supports_pthread()) {
+        try pthread.set_prio(.Fifo, 0.2);
+    } else if (builtin.target.os.tag == .windows) {
+        try win32thread.set_thread_prio(.PRIORITY_ABOVE_NORMAL);
+    }
+}
 const win32thread = struct {
     const threading = win32.system.threading;
     pub const ThreadPrio = struct {};

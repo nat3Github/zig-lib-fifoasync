@@ -15,6 +15,7 @@ pub const sched = struct {
     pub const RealtimeSched = @import("wsqueue/sched_rt.zig");
     pub const DefaultSched = @import("wsqueue/sched_gp.zig");
     pub const HybridSched = @import("wsqueue/sched_hybrid.zig");
+    pub const SchedClass4 = @import("wsqueue/sched_4class.zig");
 };
 pub const util = struct {
     pub const atomic = @import("util/atomic.zig");
