@@ -15,17 +15,17 @@ pub const ClassConfig = struct {
 };
 pub const Sched4ClassConfig = struct {
     class_1_sleep_ns: u64 = 2 * 1_000_000,
-    class_1_config: ClassConfig = .{},
-    class_2_config: ClassConfig = .{ .num_threads = 4 },
-    class_3_config: ClassConfig = .{ .num_threads = 4 },
+    class_1_config: ClassConfig = .{ .num_threads = 2 },
+    class_2_config: ClassConfig = .{ .num_threads = 3 },
+    class_3_config: ClassConfig = .{ .num_threads = 1 },
     class_4_config: ClassConfig = .{ .num_threads = 4 },
 
     pub fn init_default_with_core_count(self: *Sched4ClassConfig) void {
         const core_num: f32 = @floatFromInt(@max(std.Thread.getCpuCount() catch 4, 4));
         self.class_1_config.num_threads = @intFromFloat(core_num * 0.5);
         self.class_2_config.num_threads = @intFromFloat(core_num * 0.75);
-        self.class_3_config.num_threads = @intFromFloat(core_num * 0.75);
-        self.class_4_config.num_threads = @intFromFloat(core_num * 1);
+        self.class_3_config.num_threads = @intFromFloat(core_num * 0.5); // deinit thread only needs one thread
+        self.class_4_config.num_threads = @intFromFloat(core_num * 0.5);
     }
 };
 

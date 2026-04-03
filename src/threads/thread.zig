@@ -108,28 +108,30 @@ pub const ThreadControl = struct {
         self.wakeup();
         // routine that makes sure the thread is not stalling and properly exiting
         // stage one waiting for ACK
-        const max_usize = std.math.maxInt(usize);
-        const start_ns = 50_000;
-        // std.log.warn("{s} ack cycle", .{self.debug_name});
-        for (0..max_usize) |i| {
-            if (self.signal.is_ack_or_stopped()) break;
-            const exp_limit = 300_000_000;
-            const t_sleep_ns = std.math.powi(usize, start_ns, i + 1) catch unreachable;
-            self.start_stop_event.timedWait(t_sleep_ns) catch {};
-            self.wakeup();
-            if (t_sleep_ns >= exp_limit) break;
-        }
-        if (!self.signal.is_ack_or_stopped()) @panic("Stop not Acknowledged");
-        // std.log.warn("{s} signal cycle", .{self.debug_name});
-        for (0..max_usize) |i| {
-            if (self.signal.raw.load() == .stopped) break;
-            const exp_limit = 2_000_000_000;
-            const t_sleep_ns = std.math.powi(usize, start_ns, i + 1) catch unreachable;
-            self.start_stop_event.timedWait(t_sleep_ns) catch {};
-            if (t_sleep_ns >= exp_limit) @panic("Thread failed to finish after receiving the stop signal");
-        }
-        // std.log.warn("{s} join", .{self.debug_name});
+        // const max_usize = std.math.maxInt(usize);
+        // const start_ns = 50_000;
+        // for (0..max_usize) |i| {
+        //     if (self.signal.is_ack_or_stopped()) break;
+        //     const exp_limit = 300_000_000;
+        //     const t_sleep_ns = std.math.powi(usize, start_ns, i + 1) catch unreachable;
+        //     self.start_stop_event.timedWait(t_sleep_ns) catch {};
+        //     self.wakeup();
+        //     if (t_sleep_ns >= exp_limit) break;
+        // }
+        // std.log.err("{s}: After Wakeup did not Acknowledge Stop signal", .{self.debug_name});
+        // for (0..max_usize) |i| {
+        //     if (self.signal.raw.load() == .stopped) break;
+        //     const exp_limit = 5_000_000_000;
+        //     const t_sleep_ns = std.math.powi(usize, start_ns, i + 1) catch unreachable;
+        //     std.Thread.sleep(t_sleep_ns);
+        //     if (t_sleep_ns >= exp_limit) {
+        //         std.log.err("Thread {s} failed to finish after receiving a stop signal", .{self.debug_name});
+        //         break;
+        //     }
+        // }
+        std.log.info("joining \"{s}\"", .{self.debug_name});
         self.handle.?.join();
+        std.log.info("sucessfully joined \"{s}\"", .{self.debug_name});
         alloc.free(self.debug_name);
         self.debug_name = &.{};
         self.handle = null;
@@ -140,7 +142,6 @@ pub const ThreadControl = struct {
     /// example for the function signature: pub fn thread(status: TC.Status, self: *@This()) anyerror!void {}
     pub fn spawn(self: *ThreadControl, alloc: Allocator, comptime debug_name_fmt: []const u8, debug_name_args: anytype, function: anytype, args: anytype) !void {
         self.* = .{};
-        assert(self.handle == null);
         self.start_stop_event.reset();
         const name = try std.fmt.allocPrint(alloc, debug_name_fmt, debug_name_args);
         errdefer alloc.free(name);
@@ -158,7 +159,6 @@ pub const ThreadControl = struct {
                 };
                 std.log.info("{s} is terminating...", .{dbg_name});
                 th_status.signal.raw.store(.stopped);
-                start_stop.set();
             }
         };
         const status = ThreadStatus{
@@ -173,7 +173,5 @@ pub const ThreadControl = struct {
         );
         self.debug_name = name;
         self.handle = th;
-        self.start_stop_event.timedWait(std.math.maxInt(u64)) catch unreachable;
-        self.start_stop_event.reset();
     }
 };

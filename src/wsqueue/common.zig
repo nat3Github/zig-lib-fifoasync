@@ -55,20 +55,20 @@ pub const TaskContext = struct {
     state: *Atomic(TaskState),
     exec: AsyncExecutor,
     pub fn yield(self: *const @This()) Cancelled!void {
-        try self.exec.yield();
         if (self.state.load(.acquire) == .busy_cancelling) return Cancelled.Cancelled;
+        try self.exec.yield();
     }
 };
 
 const TaskState = enum(u8) {
     none = 0,
     has_result = 1,
-    busy = 2,
+    busy_submitted = 2,
     busy_cancelling = 3,
 
     /// the task is in it busy / locked state. result and fn args cant be touched
     pub fn is_busy(Self: TaskState) bool {
-        return @intFromEnum(Self) >= @intFromEnum(TaskState.busy);
+        return @intFromEnum(Self) >= @intFromEnum(TaskState.busy_submitted);
     }
 };
 
@@ -118,31 +118,35 @@ pub fn ASFunction(
             while (!self.has_result()) {}
         }
 
-        pub fn join(self: *@This(), tc: TaskContext) void {
+        pub fn join(self: *@This(), tc: ?TaskContext) void {
             if (self.state.load(.acquire) == .none) return;
             var xt = std.time.Timer.start() catch unreachable;
             var t: u32 = 1;
             while (!self.has_result()) {
-                tc.yield() catch {};
+                if (tc) |tc_| tc_.yield() catch {};
                 if (is_debug) {
-                    if (xt.read() > 2_000_000_000) {
+                    if (xt.read() > 10_000_000) {
                         xt.reset();
-                        std.debug.print("async fn {s}: waiting for join ..{} s elapsed\n", .{ @typeName(FnT), t * 2 });
+                        std.log.err("async fn {s}: waiting for join ..{} s elapsed\n", .{ @typeName(FnT), t * 2 });
                         t += 1;
                     }
                 }
             }
         }
-        /// NOTE the Memory of *@This() must remain well defined till the task has finished !!!
+        /// will call the function asynchronously, your fn will be called even if it was cancelled!
+        /// this is important because you potentially are doing something that absolutely must be done
+        /// i.e. deinitialize some state / handle an error etc.
+        ///
+        /// use cooperative yielding via the TaskContext
+        ///
         /// threadsafe
-        pub inline fn call(
-            self: *@This(),
-            async_executor: anytype,
-            args: FnArgs,
-        ) !void {
+        /// NOTE the Memory of *@This() must live till the task has finished!
+        /// NOTE the fn must be able to fail if you use the TaskContext
+        /// NOTE the fn MUST NOT be inline as of (zig 0.15.1)
+        pub inline fn call(self: *@This(), async_executor: anytype, args: FnArgs) !void {
             if (self.is_running()) return error.TaskIsBusy;
             self.fnarg = args;
-            self.state.store(.busy, .release);
+            self.state.store(.busy_submitted, .release);
             self.re.reset();
             var task: Task = undefined;
             task.set(@This(), self, anyopaque_run);
@@ -184,16 +188,15 @@ pub fn ASFunction(
         /// cancel a running task
         /// works only with cooperative yielding (the Task must call TaskContext.yield() on its own)
         pub inline fn cancel(self: *@This()) void {
-            _ = self.state.cmpxchgStrong(.busy, .busy_cancelling, .seq_cst, .seq_cst);
+            _ = self.state.cmpxchgStrong(.busy_submitted, .busy_cancelling, .seq_cst, .seq_cst);
         }
+        /// NOTE(nat3) you cannot just check if the task is cancelled and refrain to call it!
+        /// this is unintuitive to the user
+        /// the user might deinitialize some state / do some error handling or other important things
+        /// the task_fn returns error.Cancelled so the user expects the natural error handling flow
+        /// thats why yielding/and canceling must be deployed!
         fn anyopaque_run(p: *anyopaque, as_exe: AsyncExecutor) void {
             const self: *@This() = @ptrCast(@alignCast(p));
-            // NOTE(nat3) you cannot just check if the task is cancelled and refrain to call it!
-            // this is unintuitive to the user
-            // the user might deinitialize some state / do some error handling or other important things
-            // the task_fn returns error.Cancelled so the user expects the natural error handling flow
-            // thats why yielding/and canceling must be deployed!
-
             if (comptime @typeInfo(FnArgs).@"struct".fields.len != @typeInfo(FnT).@"fn".params.len) {
                 const ctx = self.task_context(as_exe);
                 self.fnret = @call(.auto, @This().fnc, .{ctx} ++ self.fnarg);
@@ -240,6 +243,4 @@ pub const AsyncExecutorVtable = struct {
     yield_fn: *const fn (*anyopaque) error{Cancelled}!void = __no_yield,
 };
 
-fn __no_yield(_: *anyopaque) error{Cancelled}!void {
-    std.log.warn("no yield fn implemented, this can lead to deadlocks", .{});
-}
+fn __no_yield(_: *anyopaque) error{Cancelled}!void {}

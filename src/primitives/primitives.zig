@@ -138,7 +138,7 @@ test "yield_cpu does not crash" {
 }
 
 /// Shared ReadOnly Memory
-pub fn RefCounted(comptime T: type) type {
+pub fn AtomicRefCounted(comptime T: type) type {
     return struct {
         data: T,
         ref_count: std.atomic.Value(u64) = .init(1),
@@ -156,19 +156,25 @@ pub fn RefCounted(comptime T: type) type {
         pub fn decrement(self: *@This()) bool {
             return self.ref_count.fetchSub(1, .seq_cst) == 1;
         }
+        /// Increments the reference count.
+        pub fn clone(self_: *const @This()) *@This() {
+            const self = @constCast(self_);
+            self.increment();
+            return self;
+        }
     };
 }
 
 /// A "smart pointer" wrapper for RefCounted data.
 pub fn RcRef(comptime T: type) type {
     return struct {
-        ptr: ?*RefCounted(T),
+        ptr: ?*AtomicRefCounted(T),
         pub fn init(allocator: std.mem.Allocator, value: T) !@This() {
-            const rc_data = try allocator.create(RefCounted(T));
-            rc_data.* = RefCounted(T).init(value);
+            const rc_data = try allocator.create(AtomicRefCounted(T));
+            rc_data.* = AtomicRefCounted(T).init(value);
             return .{ .ptr = rc_data };
         }
-        pub fn clone(rc_ptr: *RefCounted(T)) @This() {
+        pub fn clone(rc_ptr: *AtomicRefCounted(T)) @This() {
             rc_ptr.increment();
             return .{ .ptr = rc_ptr };
         }
