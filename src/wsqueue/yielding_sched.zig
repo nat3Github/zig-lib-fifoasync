@@ -123,6 +123,11 @@ pub fn FixedQueue(comptime T: type) type {
             self.* = .{};
             self.buffer = try alloc.alloc(T, cap);
         }
+        pub fn reset(self: *@This()) void {
+            self._head = 0;
+            self._tail = 0;
+            self._len = 0;
+        }
         pub fn deinit(self: *@This(), alloc: Allocator) void {
             alloc.free(self.buffer);
             self.* = undefined;
