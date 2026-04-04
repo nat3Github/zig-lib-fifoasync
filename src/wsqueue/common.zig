@@ -13,6 +13,7 @@ const Type = std.builtin.Type;
 const is_debug = builtin.mode == .Debug;
 
 pub const Cancelled = error{Cancelled};
+pub const Timeout = error{Timeout};
 const common = @This();
 
 /// Generic type erased Task
@@ -57,6 +58,16 @@ pub const TaskContext = struct {
     pub fn yield(self: *const @This()) Cancelled!void {
         if (self.state.load(.acquire) == .busy_cancelling) return Cancelled.Cancelled;
         try self.exec.yield();
+    }
+    /// tries to aquire the mutex and returns
+    pub fn try_lock(self: *const @This(), mtx: *std.Thread.Mutex, how_often: usize) Timeout!void {
+        _ = try_lock: {
+            for (0..how_often) |_| if (!mtx.tryLock()) {
+                self.yield();
+                break :try_lock;
+            };
+            return Timeout.Timeout;
+        };
     }
 };
 
