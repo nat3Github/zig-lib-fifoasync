@@ -59,11 +59,12 @@ pub const TaskContext = struct {
         if (self.state.load(.acquire) == .busy_cancelling) return Cancelled.Cancelled;
         try self.exec.yield();
     }
+    const LockError = Timeout || Cancelled;
     /// tries to aquire the mutex and returns
-    pub fn try_lock(self: *const @This(), mtx: *std.Thread.Mutex, how_often: usize) Timeout!void {
+    pub fn try_lock(self: *const @This(), mtx: *std.Thread.Mutex, how_often: usize) LockError!void {
         _ = try_lock: {
             for (0..how_often) |_| if (!mtx.tryLock()) {
-                self.yield();
+                try self.yield();
                 break :try_lock;
             };
             return Timeout.Timeout;

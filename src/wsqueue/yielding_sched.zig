@@ -14,7 +14,7 @@ const expect = std.testing.expect;
 pub const YieldSched = struct {
     pub const Config = struct {
         max_concurrency: usize = 32,
-        stack_size: usize = 1024 * 32, // if this is to low it can lead to Stack Overflow / BUS Error crash
+        stack_size: usize = 1024 * 64, // if this is to low it can lead to Stack Overflow / BUS Error crash
         alloc: Allocator,
     };
 
