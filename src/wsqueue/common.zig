@@ -117,6 +117,11 @@ pub fn ASFunction(
         fnret: ReturnType = undefined,
         state: Atomic(TaskState) = Atomic(TaskState).init(.none),
         re: std.Thread.ResetEvent = .{},
+        pub fn join_timeout(self: *@This(), timeout_ns: u64) void {
+            if (self.state.load(.acquire) == .none) return;
+            self.re.timedWait(timeout_ns) catch @panic("join timeout");
+            while (!self.has_result()) {}
+        }
 
         pub fn join_block(self: *@This()) void {
             if (self.state.load(.acquire) == .none) return;
@@ -133,14 +138,11 @@ pub fn ASFunction(
         pub fn join(self: *@This(), tc: ?TaskContext) void {
             if (self.state.load(.acquire) == .none) return;
             var xt = std.time.Timer.start() catch unreachable;
-            var t: u32 = 1;
             while (!self.has_result()) {
                 if (tc) |tc_| tc_.yield() catch {};
                 if (is_debug) {
-                    if (xt.read() > 10_000_000) {
-                        xt.reset();
-                        std.log.err("async fn {s}: waiting for join ..{} s elapsed\n", .{ @typeName(FnT), t * 2 });
-                        t += 1;
+                    if (xt.read() % 2_000_000_000 == 0) {
+                        std.log.err("async fn {s}: waiting for join ..{} s elapsed\n", .{ @typeName(FnT), xt.read() / 1_000_000_000 });
                     }
                 }
             }
