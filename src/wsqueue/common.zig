@@ -180,7 +180,7 @@ pub fn ASFunction(
                 },
             }
         }
-        inline fn get_task_state(self: *@This()) TaskState {
+        pub inline fn get_task_state(self: *@This()) TaskState {
             return self.state.load(.acquire);
         }
         /// threadsafe
